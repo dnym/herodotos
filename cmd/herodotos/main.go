@@ -25,6 +25,7 @@ Usage:
   herodotos step    [--db <path>]                        advance exactly one step
   herodotos run     --steps N [--db <path>]              advance N consecutive steps
   herodotos inspect [--db <path>] [--events N]           show world state summary
+  herodotos resume  [--db <path>]                        lift a durable world pause
   herodotos serve   [--db <path>] [--addr host:port]     serve the web overview
 
 Inference for step/run/serve comes from the environment:
@@ -56,6 +57,8 @@ func main() {
 		err = runRun(ctx, args)
 	case "inspect":
 		err = runInspect(ctx, args)
+	case "resume":
+		err = runResume(ctx, args)
 	case "serve":
 		err = runServe(ctx, args)
 	case "-h", "--help", "help":
@@ -197,6 +200,10 @@ func runSteps(ctx context.Context, db *store.DB, eng *sim.Engine, steps int) err
 			if errors.As(err, &f) {
 				fmt.Fprintln(os.Stderr, "  diagnostics kept in attempt", f.AttemptID)
 			}
+			if errors.Is(err, sim.ErrPaused) {
+				fmt.Fprintln(os.Stderr, "  the world is paused; resolve the conflict, then `herodotos resume`")
+				break
+			}
 			continue
 		}
 		fmt.Printf("step %d committed: %d event(s), %d model call(s), %d proposal(s)\n",
@@ -205,6 +212,32 @@ func runSteps(ctx context.Context, db *store.DB, eng *sim.Engine, steps int) err
 	if failures > 0 {
 		return fmt.Errorf("%d of %d steps failed; the world only advanced on committed steps", failures, steps)
 	}
+	return nil
+}
+
+func runResume(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("resume", flag.ExitOnError)
+	dbPath := fs.String("db", "world.db", "path to the world database")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	db, err := store.Open(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	reason, paused, err := db.WorldPause(ctx)
+	if err != nil {
+		return err
+	}
+	if !paused {
+		fmt.Println("the world is not paused")
+		return nil
+	}
+	if err := db.ResumeWorld(ctx); err != nil {
+		return err
+	}
+	fmt.Printf("world resumed (pause was: %s)\n", reason)
 	return nil
 }
 
@@ -230,6 +263,9 @@ func runInspect(ctx context.Context, args []string) error {
 		dateLabel = fmt.Sprintf("step %d (%s)", meta.ClockStep, t.Format("2 Jan 2006"))
 	}
 	fmt.Printf("world %q — %s, %d-day steps\n\n", meta.WorldName, dateLabel, meta.StepDays)
+	if reason, paused, err := db.WorldPause(ctx); err == nil && paused {
+		fmt.Printf("PAUSED: %s\n(resume with: herodotos resume --db %s)\n\n", reason, *dbPath)
+	}
 
 	fmt.Println("REGIONS")
 	regions, err := db.ListRegions(ctx)
