@@ -40,6 +40,9 @@ Hard rules:
   sentences; memory "summary" at most 60 words; at most 4 "open_threads"
   of at most 12 words each. Never sacrifice valid, complete JSON for
   detail; when room runs short, drop events, never structure.
+- set_status is a lifecycle flag, never a description: region status is
+  active|dormant, entity active|inactive|destroyed, relationship
+  active|ended. Nuance ("under negotiation", "tense") goes in attrs.
 - Events must follow from conditions, capabilities, and motivations in
   your context. Plausibility comes before story.
 - Propose at most 3 events, at most 8 changes per event, and at most 10

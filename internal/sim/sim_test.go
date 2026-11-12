@@ -181,6 +181,31 @@ func TestRegionAuthorityCorrection(t *testing.T) {
 	}
 }
 
+func TestStatusVocabularyCorrectedInsideAttempt(t *testing.T) {
+	db, ctx := setup(t)
+	// A status word outside the lifecycle vocabulary must be caught by
+	// the proposal validator, where the agent can still correct it —
+	// not at commit time, where it would kill the whole attempt.
+	bad := `{"prose":"overreach","events":[{"type":"development","title":"The queen's council ends the old alliance","prose":"p","changes":[{"object":"entity","object_id":"q-elinor","op":"set_status","patch":{"status":"deceased"}}]}]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: bad},
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchAccept},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	res, err := e.RunStep(ctx)
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	if res.ModelCalls != 4 {
+		t.Fatalf("expected 4 calls with one correction, got %d", res.ModelCalls)
+	}
+	if !strings.Contains(fake.Calls()[1].Prompt, "set_status needs") {
+		t.Error("correction round did not carry the vocabulary error")
+	}
+}
+
 func TestRetriesExhaustedLeavesStepUncommitted(t *testing.T) {
 	db, ctx := setup(t)
 	fake := &inference.Scripted{Replies: []inference.Reply{

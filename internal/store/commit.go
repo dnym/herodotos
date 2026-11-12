@@ -244,7 +244,7 @@ func applyRegionChange(ctx context.Context, tx execer, eventID string, ch domain
 		return logStateChange(ctx, tx, eventID, ch, decodeAttrs(attrs))
 	case "set_status":
 		v, _ := ch.Patch["status"].(string)
-		if v != "active" && v != "dormant" {
+		if !domain.ValidStatus("region", v) {
 			return fmt.Errorf("region %s: invalid status %q", ch.ObjectID, v)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE regions SET status = ? WHERE id = ?`, v, ch.ObjectID); err != nil {
@@ -296,7 +296,7 @@ func applyEntityChange(ctx context.Context, tx execer, eventID string, ch domain
 		return logStateChange(ctx, tx, eventID, ch, decodeAttrs(attrs))
 	case "set_status":
 		v, _ := ch.Patch["status"].(string)
-		if v != "active" && v != "inactive" && v != "destroyed" {
+		if !domain.ValidStatus("entity", v) {
 			return fmt.Errorf("entity %s: invalid status %q", ch.ObjectID, v)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE entities SET status = ? WHERE id = ?`, v, ch.ObjectID); err != nil {
@@ -346,7 +346,7 @@ func applyRelationshipChange(ctx context.Context, tx execer, eventID string, ch 
 	switch ch.Op {
 	case "set_status":
 		v, _ := ch.Patch["status"].(string)
-		if v != "active" && v != "ended" {
+		if !domain.ValidStatus("relationship", v) {
 			return fmt.Errorf("relationship %s: invalid status %q", ch.ObjectID, v)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE relationships SET status = ? WHERE id = ?`, v, ch.ObjectID); err != nil {

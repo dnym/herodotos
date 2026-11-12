@@ -32,6 +32,9 @@ Rules:
   reference documents, or hard directives. Never silently rewrite established
   history. If a hard directive cannot be satisfied without contradiction,
   set its status to conflicting and return pause with the reason.
+- set_status is a lifecycle flag, never a description: region status is
+  active|dormant, entity active|inactive|destroyed, relationship
+  active|ended. Nuance goes in attrs.
 - Interacting proposals must collapse to one shared outcome. No region
   may dictate another region's response. Ask for reactions sparingly and
   only when a real missing decision blocks the step.

@@ -164,6 +164,27 @@ type Memory struct {
 	UpdatedStep int      `json:"updated_step"`
 }
 
+// StatusVocabulary lists the allowed set_status values per object
+// kind. Status is a lifecycle flag, not a description: narrative
+// color ("under negotiation", "tense") belongs in attrs. The commit
+// layer enforces exactly this vocabulary, so validators can reject
+// bad values while the agent can still correct them.
+var StatusVocabulary = map[string][]string{
+	"region":       {"active", "dormant"},
+	"entity":       {"active", "inactive", "destroyed"},
+	"relationship": {"active", "ended"},
+}
+
+// ValidStatus reports whether status is allowed for the object kind.
+func ValidStatus(object, status string) bool {
+	for _, s := range StatusVocabulary[object] {
+		if s == status {
+			return true
+		}
+	}
+	return false
+}
+
 // ReferenceDoc is human-authored reference material scoped to the world
 // or one region: binding rules or advisory knowledge (a skill-style doc
 // whose description is always shown and whose body is loaded on match

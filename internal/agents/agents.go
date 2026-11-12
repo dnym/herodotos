@@ -427,6 +427,21 @@ type ProposalValidator struct {
 	CurrentStep int // committed clock; commitment will produce CurrentStep+1
 }
 
+// checkStatusValue rejects set_status values outside the lifecycle
+// vocabulary. Enforcing it here (not just at commit) turns a would-be
+// dead attempt into a correction the agent can actually fix.
+func checkStatusValue(ch domain.Change) error {
+	if ch.Op != "set_status" {
+		return nil
+	}
+	v, _ := ch.Patch["status"].(string)
+	if domain.ValidStatus(ch.Object, v) {
+		return nil
+	}
+	return fmt.Errorf("%s %s: set_status needs %s; describe nuance in attrs instead",
+		ch.Object, ch.ObjectID, strings.Join(domain.StatusVocabulary[ch.Object], " or "))
+}
+
 // ValidateLogographerProposal enforces regional authority (FR-021): an
 // agent may change only its own region and entities, and may not touch
 // directives.
@@ -476,6 +491,9 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 		case "set_attrs", "upsert", "set_status":
 		default:
 			return fmt.Errorf("invalid op %q", ch.Op)
+		}
+		if err := checkStatusValue(ch); err != nil {
+			return err
 		}
 	}
 	for _, id := range ev.AffectsEntities {
@@ -544,6 +562,9 @@ func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 		case "set_attrs", "upsert", "set_status":
 		default:
 			return fmt.Errorf("invalid op %q", ch.Op)
+		}
+		if err := checkStatusValue(ch); err != nil {
+			return err
 		}
 	}
 	for _, id := range ev.AffectsEntities {

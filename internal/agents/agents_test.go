@@ -67,6 +67,28 @@ func TestValidateLogographerProposal(t *testing.T) {
 	if err := pv.ValidateLogographerProposal("king-a", tooSoon); err == nil {
 		t.Fatal("delivery at current+0 boundary accepted")
 	}
+
+	// set_status vocabulary must be caught while the agent can still
+	// correct it, and the error must teach the vocabulary.
+	snap.Relationships = map[domain.ID]*domain.Relationship{"rel-1": {ID: "rel-1", Status: "active"}}
+	relBad := &domain.PropEvent{Title: "t", Prose: "p", Changes: []domain.Change{{Object: "relationship", ObjectID: "rel-1", Op: "set_status", Patch: map[string]any{"status": "under negotiation"}}}}
+	err := pv.ValidateLogographerProposal("king-a", relBad)
+	if err == nil {
+		t.Fatal("out-of-vocabulary relationship status accepted at proposal time")
+	}
+	if !strings.Contains(err.Error(), "active or ended") {
+		t.Errorf("rejection must teach the vocabulary: %v", err)
+	}
+	if err := pv.ValidateFinalEvent(relBad); err == nil {
+		t.Fatal("out-of-vocabulary status accepted in orchestrator output")
+	}
+	relGood := &domain.PropEvent{Title: "t", Prose: "p", Changes: []domain.Change{{Object: "relationship", ObjectID: "rel-1", Op: "set_status", Patch: map[string]any{"status": "ended"}}}}
+	if err := pv.ValidateLogographerProposal("king-a", relGood); err != nil {
+		t.Errorf("valid status rejected: %v", err)
+	}
+	if err := pv.ValidateFinalEvent(relGood); err != nil {
+		t.Errorf("valid status rejected in final event: %v", err)
+	}
 }
 
 func TestDetectInteractions(t *testing.T) {
