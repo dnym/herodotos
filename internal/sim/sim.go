@@ -172,7 +172,11 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 	for round := 0; ; round++ {
 		interactions := agents.DetectInteractions(proposals)
 		prompt := agents.RenderOrchestratorPrompt(snap.Meta, currentStep, snap, proposals, interactions, b.MaxPromptBytes)
-		reply, err := st.askOrchestrator(ctx, prompt, round < b.MaxReactionRounds)
+		// Once the reaction budget is spent, exactly one final
+		// adjudication call remains: it must resolve or pause. An
+		// unresolved reaction request is never a successful outcome.
+		finalOnly := round >= b.MaxReactionRounds
+		reply, err := st.askOrchestrator(ctx, prompt, !finalOnly, finalOnly)
 		if err != nil {
 			return fail("orchestrator failed", err)
 		}
@@ -466,7 +470,7 @@ func (s *stepRun) askConsult(ctx context.Context, regionID string, view *knowled
 	return reply, nil
 }
 
-func (s *stepRun) askOrchestrator(ctx context.Context, prompt string, reactionsOK bool) (*agents.OrchestratorReply, error) {
+func (s *stepRun) askOrchestrator(ctx context.Context, prompt string, reactionsOK, finalOnly bool) (*agents.OrchestratorReply, error) {
 	var reply *agents.OrchestratorReply
 	maxTok := s.b.MaxOutputTokensOrchestr
 	if maxTok <= 0 {
@@ -489,6 +493,9 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt string, reactionsO
 				if s.snap.Directives[ds.ID] == nil {
 					return fmt.Errorf("unknown directive %q in directive_status", ds.ID)
 				}
+			}
+			if finalOnly && len(r.Reactions) > 0 {
+				return fmt.Errorf("this is the final adjudication call: the reaction budget is spent, so reaction requests are not accepted. Resolve now: emit the merged events, or pause with a reason")
 			}
 			if reactionsOK {
 				for region, rx := range r.Reactions {

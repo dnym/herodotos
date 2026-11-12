@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dnym/herodotos/internal/agents"
+	"github.com/dnym/herodotos/internal/config"
 	"github.com/dnym/herodotos/internal/domain"
 	"github.com/dnym/herodotos/internal/inference"
 	"github.com/dnym/herodotos/internal/knowledge"
@@ -528,6 +529,111 @@ func TestReactionPremiseCannotLeakDelayedNews(t *testing.T) {
 	snap, _ := db.LoadSnapshot(ctx)
 	if snap.Regions["king-a"].Attrs["unrest"] != "high" {
 		t.Fatalf("step after correction: %v", snap.Regions["king-a"].Attrs)
+	}
+}
+
+func TestReactionBudgetExhaustedForcesFinalAdjudication(t *testing.T) {
+	db, ctx := setup(t)
+	bMarket := `{"prose":"A market decree.","events":[{"type":"development","title":"Border market closed","prose":"The ford market shuts by decree.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"market":"shut"}}]}]}`
+	// Step 1 commits an event prin-b can see, so a reaction premise is
+	// valid in step 2.
+	if _, err := (&Engine{DB: db, Client: &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: bMarket},
+		{Role: "orchestrator", Text: `{"notes":"A local decree.","events":[{"origin":"prin-b","type":"development","title":"Border market closed","prose":"The ford market shuts by decree.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"market":"shut"}}]}]}`},
+	}}}).RunStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Step 2: the orchestrator asks twice (rounds 0 and 1 within the
+	// budget of 2), then at the final adjudication call it still tries
+	// to ask — rejected in-turn, and it resolves instead.
+	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"question":"Close the ford too?","premise":["evt-000001"]}}}`
+	resolve := `{"notes":"Resolved without asking.","events":[{"origin":"prin-b","type":"interaction","title":"The ford is shut","prose":"Garrisons bar the crossing.","causes":["evt-000001"],"changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"ford":"shut"}}]}]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: ask}, // round 0: within budget
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: ask}, // round 1: still within budget
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: ask},     // final call: rejected in-turn
+		{Role: "orchestrator", Text: resolve}, // final call: resolves
+	}}
+	res, err := (&Engine{DB: db, Client: fake, ModelName: "fake"}).RunStep(ctx)
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	if res.ModelCalls != 8 {
+		t.Fatalf("expected 2 initial + 4 orchestrator + 2 reaction calls, got %+v", res)
+	}
+	if !strings.Contains(fake.Calls()[7].Prompt, "final adjudication call") {
+		t.Error("final-call rejection did not teach the orchestrator")
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Regions["prin-b"].Attrs["ford"] != "shut" {
+		t.Fatalf("final adjudication not committed: %v", snap.Regions["prin-b"].Attrs)
+	}
+}
+
+func TestReactionBudgetPersistentAskingFailsAttempt(t *testing.T) {
+	db, ctx := setup(t)
+	bMarket := `{"prose":"A market decree.","events":[{"type":"development","title":"Border market closed","prose":"The ford market shuts by decree.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"market":"shut"}}]}]}`
+	if _, err := (&Engine{DB: db, Client: &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: bMarket},
+		{Role: "orchestrator", Text: `{"notes":"A local decree.","events":[{"origin":"prin-b","type":"development","title":"Border market closed","prose":"The ford market shuts by decree.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"market":"shut"}}]}]}`},
+	}}}).RunStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"question":"Close the ford too?","premise":["evt-000001"]}}}`
+	// Exhaust the reaction budget with requests, then keep asking at the
+	// final call until correction retries run out.
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: ask},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: ask},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: ask},
+		{Role: "orchestrator", Text: ask},
+		{Role: "orchestrator", Text: ask},
+	}}
+	_, err := (&Engine{DB: db, Client: fake, ModelName: "fake"}).RunStep(ctx)
+	if err == nil {
+		t.Fatal("unresolved reaction request committed as success")
+	}
+	if !strings.Contains(err.Error(), "final adjudication call") {
+		t.Errorf("failure must name the exhausted-reaction cause: %v", err)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Meta.ClockStep != 1 {
+		t.Fatalf("failed attempt advanced the clock: %d", snap.Meta.ClockStep)
+	}
+	if snap.Regions["prin-b"].Attrs["ford"] != nil {
+		t.Fatal("failed attempt changed canonical state")
+	}
+}
+
+func TestZeroReactionBudgetRejectsAnyRequest(t *testing.T) {
+	db, ctx := setup(t)
+	b := config.DefaultBudgets()
+	b.MaxReactionRounds = 0
+	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"question":"why?","premise":["evt-000001"]}}}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: ask},
+		{Role: "orchestrator", Text: ask},
+		{Role: "orchestrator", Text: ask},
+	}}
+	_, err := (&Engine{DB: db, Client: fake, ModelName: "fake", Budgets: b}).RunStep(ctx)
+	if err == nil || !strings.Contains(err.Error(), "final adjudication call") {
+		t.Fatalf("with zero reaction rounds any request must fail: %v", err)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Meta.ClockStep != 0 {
+		t.Fatalf("failed attempt advanced the clock: %d", snap.Meta.ClockStep)
 	}
 }
 

@@ -43,7 +43,8 @@ Rules:
   "premise" must list canonical events that region could already know:
   its own recent history or reports delivered to it by now. Never base
   a question on news not yet delivered, nor on another region's
-  private affairs.
+  private affairs. Reaction requests are budgeted: once exhausted, your
+  next call must resolve the step or pause — asking again is rejected.
 - Accept proposals that do not interact; do not rewrite what works.
 - Preserve causality: every final event must carry at least one "causes"
   entry naming a canonical event it follows from (step 1 excepted).
