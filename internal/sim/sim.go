@@ -379,25 +379,36 @@ func retryParse(s *stepRun, ctx context.Context, role, system, prompt string, te
 	correction := ""
 	var lastErr error
 	for tries := 0; tries <= s.b.MaxCorrectionRetries; tries++ {
-		text, err := s.call(ctx, role, system, prompt+correction, temp, maxTokens)
+		text, truncated, err := s.call(ctx, role, system, prompt+correction, temp, maxTokens)
 		if err != nil {
 			return err
 		}
-		lastErr = validate(text)
+		if truncated {
+			lastErr = fmt.Errorf("reply hit the %d-token output limit and is incomplete", maxTokens)
+		} else {
+			lastErr = validate(text)
+		}
 		if lastErr == nil {
 			return nil
 		}
-		correction = "\n\nYour previous reply was rejected: " + lastErr.Error() + "\nReply with only a corrected JSON object."
+		diagnosis := lastErr.Error()
+		if truncated {
+			diagnosis = "your reply was cut off at the output limit, so the JSON is incomplete. " +
+				"Reply again with at most half the detail: fewer events, two short sentences per event prose, " +
+				"minimal patches. A complete smaller reply beats a rich truncated one."
+		}
+		correction = "\n\nYour previous reply was rejected: " + diagnosis + "\nReply with only a corrected JSON object."
 	}
 	return fmt.Errorf("exhausted %d correction retries (last: %v)", s.b.MaxCorrectionRetries, lastErr)
 }
 
 // call performs one model interaction inside the per-step budget.
-// maxTokens <= 0 falls back to the logographer ceiling.
-func (s *stepRun) call(ctx context.Context, role, system, prompt string, temp float64, maxTokens int) (string, error) {
+// maxTokens <= 0 falls back to the logographer ceiling. The bool result
+// reports whether the backend cut the reply at the output limit.
+func (s *stepRun) call(ctx context.Context, role, system, prompt string, temp float64, maxTokens int) (string, bool, error) {
 	s.used++
 	if s.used > s.b.MaxModelCallsPerStep {
-		return "", fmt.Errorf("model call budget (%d) exhausted", s.b.MaxModelCallsPerStep)
+		return "", false, fmt.Errorf("model call budget (%d) exhausted", s.b.MaxModelCallsPerStep)
 	}
 	if maxTokens <= 0 {
 		maxTokens = s.b.MaxOutputTokens
@@ -412,21 +423,25 @@ func (s *stepRun) call(ctx context.Context, role, system, prompt string, temp fl
 	sum := sha256.Sum256([]byte(system + "\x00" + prompt))
 	reqJSON := jsonPreview(map[string]string{"system": system, "prompt": prompt})
 	var respJSON string
+	var truncNote string
 	if callErr == nil {
 		respJSON = jsonPreview(map[string]string{"text": resp.Text})
+		if resp.Truncated {
+			truncNote = "reply truncated at output limit"
+		}
 	}
-	errStr := ""
+	errStr := truncNote
 	if callErr != nil {
 		errStr = callErr.Error()
 	}
 	if recErr := s.e.DB.RecordModelCall(ctx, s.attempt, role, s.e.ModelName, hex.EncodeToString(sum[:]),
 		reqJSON, respJSON, resp.InputTokens, resp.OutputTokens, dur, errStr); recErr != nil {
-		return "", fmt.Errorf("record model call: %w", recErr)
+		return "", false, fmt.Errorf("record model call: %w", recErr)
 	}
 	if callErr != nil {
-		return "", fmt.Errorf("inference call for %s: %w", role, callErr)
+		return "", false, fmt.Errorf("inference call for %s: %w", role, callErr)
 	}
-	return resp.Text, nil
+	return resp.Text, resp.Truncated, nil
 }
 
 func jsonPreview(v any) string {

@@ -17,10 +17,13 @@ type Scripted struct {
 }
 
 // Reply is one scripted interaction. When Err is set the call fails.
+// When Truncated is set the response reports as cut at the output limit,
+// which lets tests exercise truncation handling.
 type Reply struct {
-	Role string
-	Text string
-	Err  error
+	Role      string
+	Text      string
+	Err       error
+	Truncated bool
 }
 
 // Complete implements Client.
@@ -39,7 +42,7 @@ func (f *Scripted) Complete(ctx context.Context, req Request) (Response, error) 
 	if r.Err != nil {
 		return Response{}, r.Err
 	}
-	return Response{Text: r.Text, InputTokens: len(req.System) + len(req.Prompt), OutputTokens: len(r.Text)}, nil
+	return Response{Text: r.Text, InputTokens: len(req.System) + len(req.Prompt), OutputTokens: len(r.Text), Truncated: r.Truncated}, nil
 }
 
 // Calls returns the requests made so far.

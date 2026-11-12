@@ -200,6 +200,36 @@ func TestOrchestratorPauseDoesNotRewriteHistory(t *testing.T) {
 	}
 }
 
+func TestTruncatedReplyCorrected(t *testing.T) {
+	db, ctx := setup(t)
+
+	orchGood := `{"notes":"resolved","events":[{"origin":"king-a","type":"development","title":"Border clash","prose":"Skirmish at the ford.","changes":[],"delivery":{"prin-b":2}}],"directive_status":[],"reactions":{},"pause":null}`
+	// Same reply but flagged as cut by the backend: must be rejected even
+	// though it parses, and the correction must say why.
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchGood, Truncated: true},
+		{Role: "orchestrator", Text: orchGood},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("step should recover after truncation correction: %v", err)
+	}
+	calls := fake.Calls()
+	if n := len(calls); n != 4 {
+		t.Fatalf("want 4 model calls, got %d", n)
+	}
+	if !strings.Contains(calls[3].Prompt, "cut off at the output limit") {
+		t.Fatal("truncation correction missing")
+	}
+	// The truncated reply must not have been applied a second time.
+	events, _ := db.ListEvents(ctx, store.EventQuery{})
+	if len(events) != 1 {
+		t.Fatalf("event applied twice: %d events", len(events))
+	}
+}
+
 func TestReactionRound(t *testing.T) {
 	db, ctx := setup(t)
 	prinReact := `{"prose":"The principality mobilizes cautiously.","events":[{"type":"interaction","title":"Border guards on alert","prose":"B's garrisons watch the frontier.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alert":"elevated"}}]}],"memory":{"summary":"Alert on the border."}}`

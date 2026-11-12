@@ -27,8 +27,8 @@ func DefaultBudgets() Budgets {
 		MaxReactionRounds:       2,
 		MaxCorrectionRetries:    2,
 		MaxModelCallsPerStep:    20,
-		MaxOutputTokens:         3000,
-		MaxOutputTokensOrchestr: 4500,
+		MaxOutputTokens:         3600,
+		MaxOutputTokensOrchestr: 6000,
 		MaxPromptBytes:          120_000,
 	}
 }

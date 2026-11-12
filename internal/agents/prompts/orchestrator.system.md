@@ -36,6 +36,9 @@ Rules:
   were shown, carry the causal event ids in its "causes" list. A step
   where every event has empty causes usually means you dropped links
   the proposals already made.
+- Keep "directive_status" terse: directive id and status word only.
+  Bookkeeping must never crowd out the events; a complete smaller reply
+  always beats a rich truncated one.
 - Prefer partial, plausible realization of soft directives over
   contrived fulfillment. An outcome is not fulfilled merely because a
   plan exists.

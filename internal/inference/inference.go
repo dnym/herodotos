@@ -19,6 +19,9 @@ type Response struct {
 	Text         string
 	InputTokens  int
 	OutputTokens int
+	// Truncated is set when the backend stopped at the output limit,
+	// which almost always means structurally incomplete JSON.
+	Truncated bool
 }
 
 // Client performs one completion call. Implementations must honor ctx

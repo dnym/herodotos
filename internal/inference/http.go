@@ -71,6 +71,7 @@ func (c *HTTPClient) Complete(ctx context.Context, req Request) (Response, error
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -87,6 +88,7 @@ func (c *HTTPClient) Complete(ctx context.Context, req Request) (Response, error
 		Text:         out.Choices[0].Message.Content,
 		InputTokens:  out.Usage.PromptTokens,
 		OutputTokens: out.Usage.CompletionTokens,
+		Truncated:    out.Choices[0].FinishReason == "length",
 	}, nil
 }
 
