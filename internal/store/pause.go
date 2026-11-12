@@ -33,8 +33,12 @@ func (d *DB) PauseWorld(ctx context.Context, attemptID, reason string) error {
 
 // WorldPause reports the reason the world is paused, and whether it is.
 func (d *DB) WorldPause(ctx context.Context) (string, bool, error) {
+	return worldPauseTx(ctx, d.sqlDB)
+}
+
+func worldPauseTx(ctx context.Context, db execer) (string, bool, error) {
 	var reason string
-	err := d.sqlDB.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, worldPausedKey).Scan(&reason)
+	err := db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, worldPausedKey).Scan(&reason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}

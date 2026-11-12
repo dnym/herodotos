@@ -249,6 +249,18 @@ func TestExportBundle(t *testing.T) {
 	if len(b.Connections) != 1 || len(b.Memories) != 2 {
 		t.Errorf("missing geography/memory in export")
 	}
+	if b.Pause != nil {
+		t.Errorf("paused flag in an unpaused export: %+v", b.Pause)
+	}
+	if err := d.PauseWorld(ctx, "", "hard directive unresolvable"); err != nil {
+		t.Fatal(err)
+	}
+	if b, err = d.ExportBundle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b.Pause == nil || b.Pause.Reason != "hard directive unresolvable" {
+		t.Errorf("durable pause missing from export: %+v", b.Pause)
+	}
 	// Must round-trip as JSON with snake_case keys.
 	raw, err := json.Marshal(b)
 	if err != nil {

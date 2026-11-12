@@ -7,9 +7,13 @@ import (
 	"github.com/dnym/herodotos/internal/domain"
 )
 
-// ExportBundle is the complete canonical world as one JSON document.
-// It deliberately excludes attempt diagnostics: those are engineering
-// traces, not world content.
+// ExportBundle is the complete canonical world as one JSON document:
+// current state plus the full event history. It deliberately excludes
+// attempt diagnostics (engineering traces, not world content), the
+// per-field state-change audit log (derivable by replaying events in
+// order), and disabled reference documents (kept in the database but
+// intentionally out of every agent view). The durable pause flag is
+// included: it is part of the world's current condition.
 type ExportBundle struct {
 	GenTool       string                `json:"gen_tool"`
 	Regions       []domain.Region       `json:"regions"`
@@ -23,6 +27,12 @@ type ExportBundle struct {
 	Beliefs       []domain.Belief       `json:"beliefs"`
 	Memories      []domain.Memory       `json:"memories"`
 	Meta          domain.Meta           `json:"meta"`
+	Pause         *ExportPause          `json:"pause,omitempty"`
+}
+
+// ExportPause records a durable world pause, if one is in effect.
+type ExportPause struct {
+	Reason string `json:"reason"`
 }
 
 // ExportBundle reads the entire committed world in chronological order.
@@ -95,6 +105,13 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 	}
 	for _, id := range sortedDomainKeys(snap.Memories) {
 		b.Memories = append(b.Memories, *snap.Memories[id])
+	}
+	reason, paused, err := worldPauseTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if paused {
+		b.Pause = &ExportPause{Reason: reason}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
