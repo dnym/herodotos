@@ -326,8 +326,13 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		})
 	}
 
-	for regionID, bs := range beliefs {
-		for _, bl := range bs {
+	beliefRegions := make([]string, 0, len(beliefs))
+	for regionID := range beliefs {
+		beliefRegions = append(beliefRegions, regionID)
+	}
+	sort.Strings(beliefRegions) // stable row ids: same step, same order
+	for _, regionID := range beliefRegions {
+		for _, bl := range beliefs[regionID] {
 			plan.Beliefs = append(plan.Beliefs, domain.Belief{
 				RegionID: regionID, SubjectID: bl.SubjectID,
 				Modality: bl.Modality, Statement: bl.Statement,
