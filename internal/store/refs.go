@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -41,6 +42,9 @@ func (d *DB) CreateReference(ctx context.Context, ref domain.ReferenceDoc) (stri
 		id, ref.Scope, region, binding, ref.Title, ref.Body, ref.Keywords, ref.Description); err != nil {
 		return "", fmt.Errorf("reference %s: %w", id, err)
 	}
+	if err := bumpRevisionTx(ctx, tx); err != nil {
+		return "", err
+	}
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
@@ -48,7 +52,9 @@ func (d *DB) CreateReference(ctx context.Context, ref domain.ReferenceDoc) (stri
 }
 
 // UpdateReference rewrites an existing reference document, enabled flag
-// included. It returns false when the id does not exist.
+// included. It returns false when the id does not exist. Like directive
+// edits, the write and the revision bump share one transaction: a step
+// in flight against the old rules cannot commit afterwards.
 func (d *DB) UpdateReference(ctx context.Context, ref domain.ReferenceDoc) (bool, error) {
 	if err := validateRef(ref); err != nil {
 		return false, err
@@ -64,25 +70,32 @@ func (d *DB) UpdateReference(ctx context.Context, ref domain.ReferenceDoc) (bool
 	if ref.Scope == "region" {
 		region = ref.RegionID
 	}
-	res, err := d.sqlDB.ExecContext(ctx,
-		`UPDATE reference_docs SET scope=?, region_id=?, binding=?, title=?, body=?, keywords=?, description=?, enabled=?
-		 WHERE id = ?`,
-		ref.Scope, region, binding, ref.Title, ref.Body, ref.Keywords, ref.Description, enabled, ref.ID)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	return d.mutateWithRevisionBump(ctx, func(tx *sql.Tx) (bool, error) {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE reference_docs SET scope=?, region_id=?, binding=?, title=?, body=?, keywords=?, description=?, enabled=?
+			 WHERE id = ?`,
+			ref.Scope, region, binding, ref.Title, ref.Body, ref.Keywords, ref.Description, enabled, ref.ID)
+		if err != nil {
+			return false, err
+		}
+		n, err := res.RowsAffected()
+		return n == 1, err
+	})
 }
 
 // DeleteReference removes a reference document.
 func (d *DB) DeleteReference(ctx context.Context, id domain.ID) (bool, error) {
-	res, err := d.sqlDB.ExecContext(ctx, `DELETE FROM reference_docs WHERE id = ?`, id)
-	if err != nil {
-		return false, err
+	if !domain.ValidID(string(id)) {
+		return false, nil
 	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	return d.mutateWithRevisionBump(ctx, func(tx *sql.Tx) (bool, error) {
+		res, err := tx.ExecContext(ctx, `DELETE FROM reference_docs WHERE id = ?`, id)
+		if err != nil {
+			return false, err
+		}
+		n, err := res.RowsAffected()
+		return n == 1, err
+	})
 }
 
 // ListReferences returns every reference document, disabled ones

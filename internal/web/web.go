@@ -306,7 +306,27 @@ func stepsFormValue(v string) int {
 
 // --- directives ---
 
+// editingDuringRun reports whether creative input may change now. While
+// a step is in flight, its prompt was rendered under the directives and
+// reference documents that existed at snapshot time; letting those
+// change mid-inference would commit an outcome adjudicated against
+// retired rules. Edits belong at an idle or paused boundary. The store
+// layer additionally bumps the revision so any race that slips past
+// this check fails the commit instead.
+func (s *Server) editingDuringRun() bool {
+	if s.Engine == nil {
+		return false
+	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.run != nil && s.run.Active
+}
+
 func (s *Server) actionDirectiveEdit(w http.ResponseWriter, r *http.Request) {
+	if s.editingDuringRun() {
+		redirectFlash(w, r, "/", "the world is mid-step: pause and wait for the step boundary before editing directives", true)
+		return
+	}
 	id := r.FormValue("id")
 	text := strings.TrimSpace(r.FormValue("text"))
 	if !domain.ValidID(id) || text == "" || len(text) > 500 {
@@ -326,6 +346,10 @@ func (s *Server) actionDirectiveEdit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) actionDirectiveAdd(w http.ResponseWriter, r *http.Request) {
+	if s.editingDuringRun() {
+		redirectFlash(w, r, "/", "the world is mid-step: pause and wait for the step boundary before adding directives", true)
+		return
+	}
 	text := strings.TrimSpace(r.FormValue("text"))
 	if text == "" || len(text) > 500 {
 		redirectFlash(w, r, "/", "a directive needs 1-500 characters of text", true)
@@ -385,6 +409,10 @@ func refFromForm(r *http.Request) domain.ReferenceDoc {
 }
 
 func (s *Server) actionReferenceAdd(w http.ResponseWriter, r *http.Request) {
+	if s.editingDuringRun() {
+		redirectFlash(w, r, "/references", "the world is mid-step: pause and wait for the step boundary before editing references", true)
+		return
+	}
 	ref := refFromForm(r)
 	id, err := s.DB.CreateReference(r.Context(), ref)
 	if err != nil {
@@ -395,6 +423,10 @@ func (s *Server) actionReferenceAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) actionReferenceUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.editingDuringRun() {
+		redirectFlash(w, r, "/references", "the world is mid-step: pause and wait for the step boundary before editing references", true)
+		return
+	}
 	ref := refFromForm(r)
 	if !domain.ValidID(string(ref.ID)) {
 		redirectFlash(w, r, "/references", "reference update needs a valid id", true)
@@ -417,6 +449,10 @@ func (s *Server) actionReferenceUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) actionReferenceDelete(w http.ResponseWriter, r *http.Request) {
+	if s.editingDuringRun() {
+		redirectFlash(w, r, "/references", "the world is mid-step: pause and wait for the step boundary before editing references", true)
+		return
+	}
 	id := r.FormValue("id")
 	ok, err := s.DB.DeleteReference(r.Context(), domain.ID(id))
 	if err != nil || !ok {

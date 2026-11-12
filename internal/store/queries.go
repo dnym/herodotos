@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/dnym/herodotos/internal/domain"
 )
@@ -123,14 +124,21 @@ func (d *DB) ListDirectives(ctx context.Context) ([]domain.Directive, error) {
 
 // UpdateDirectiveText rewrites a directive's wording. Directive text
 // belongs to the creative director, never to agents; this is the human
-// path. Returns false when the id does not exist.
+// path. Rewording resets the assessment status: an old verdict does not
+// describe the new text. The write and the creative-input revision bump
+// share one transaction, so any step that snapshotted the old rules
+// fails its commit check instead of adjudicating against changed ones.
+// Returns false when the id does not exist.
 func (d *DB) UpdateDirectiveText(ctx context.Context, id domain.ID, text string) (bool, error) {
-	res, err := d.sqlDB.ExecContext(ctx, `UPDATE directives SET text = ? WHERE id = ?`, text, id)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	return d.mutateWithRevisionBump(ctx, func(tx *sql.Tx) (bool, error) {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE directives SET text = ?, status = 'pending' WHERE id = ?`, text, id)
+		if err != nil {
+			return false, err
+		}
+		n, err := res.RowsAffected()
+		return n == 1, err
+	})
 }
 
 // CreateDirective adds a new active directive and returns its id.
@@ -152,10 +160,53 @@ func (d *DB) CreateDirective(ctx context.Context, text string, hard bool) (strin
 		`INSERT INTO directives(id, text, hard, status) VALUES (?, ?, ?, 'active')`, id, text, h); err != nil {
 		return "", err
 	}
+	if err := bumpRevisionTx(ctx, tx); err != nil {
+		return "", err
+	}
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// mutateWithRevisionBump runs one human creative-input mutation and the
+// creative-input revision bump inside a single transaction, so a step
+// that loaded its snapshot before the mutation fails CommitStep's
+// revision check rather than committing an outcome adjudicated under
+// the previous rules.
+func (d *DB) mutateWithRevisionBump(ctx context.Context, mutate func(tx *sql.Tx) (bool, error)) (bool, error) {
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	ok, err := mutate(tx)
+	if err != nil || !ok {
+		return false, err
+	}
+	if err := bumpRevisionTx(ctx, tx); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// bumpRevisionTx increments the commit revision counter, invalidating
+// any step that snapshotted the world earlier.
+func bumpRevisionTx(ctx context.Context, tx *sql.Tx) error {
+	cur, err := currentRevisionTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	return setMetaTx(ctx, tx, "revision", fmt.Sprint(cur+1))
+}
+
+func currentRevisionTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+	var rev int64
+	err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'revision'`).Scan(&rev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return rev, err
 }
 
 // ReportRow pairs a report with its event title for inspection.

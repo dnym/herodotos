@@ -631,3 +631,56 @@ func TestStepWithoutInference(t *testing.T) {
 		t.Fatalf("expected guidance redirect, got %q", resp.Header.Get("Location"))
 	}
 }
+
+func TestCreativeInputRefusedDuringStep(t *testing.T) {
+	s := newTestServer(t, true)
+	s.Engine.Client = &slowClient{inner: &inference.Scripted{Replies: quietStep()}, delay: 400 * time.Millisecond}
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	postForm(t, ts, "/step", url.Values{}, "").Body.Close()
+	// Wait until the run is actually in flight, then try to change the
+	// creative rules from under it.
+	deadline := time.Now().Add(5 * time.Second)
+	for !s.editingDuringRun() {
+		if time.Now().After(deadline) {
+			t.Fatal("run never became active")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	resp := postForm(t, ts, "/directive/add", url.Values{"text": {"Sneaked in mid-step."}, "hard": {"1"}}, "")
+	msg, isErr := flashOf(t, resp)
+	if !isErr || !strings.Contains(msg, "mid-step") {
+		t.Fatalf("mid-run directive add must be refused: %q (err=%v)", msg, isErr)
+	}
+	resp = postForm(t, ts, "/reference/add", url.Values{
+		"id": {"ref-sneak"}, "scope": {"world"}, "title": {"T"}, "body": {"B"}, "enabled": {"1"},
+	}, "")
+	if _, isErr = flashOf(t, resp); !isErr {
+		t.Fatal("mid-run reference add must be refused")
+	}
+	resp = postForm(t, ts, "/reference/delete", url.Values{"id": {"ref-world-rules"}}, "")
+	if _, isErr = flashOf(t, resp); !isErr {
+		t.Fatal("mid-run reference delete must be refused")
+	}
+
+	// Nothing changed under the running step, and it committed cleanly.
+	waitRunIdle(t, s)
+	refs, _ := s.DB.ListReferences(context.Background())
+	for _, ref := range refs {
+		if ref.ID == "ref-sneak" {
+			t.Fatal("reference created during run")
+		}
+	}
+	dirs, _ := s.DB.ListDirectives(context.Background())
+	for _, dd := range dirs {
+		if dd.Text == "Sneaked in mid-step." {
+			t.Fatal("directive created during run")
+		}
+	}
+	meta, _ := s.DB.GetMeta(context.Background())
+	if meta.ClockStep != 1 {
+		t.Fatalf("step did not commit: clock %d", meta.ClockStep)
+	}
+}

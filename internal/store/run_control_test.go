@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/dnym/herodotos/internal/domain"
@@ -135,6 +136,71 @@ func TestDirectiveMutationByHuman(t *testing.T) {
 	ok, err = d.UpdateDirectiveText(ctx, "dir-999999", "nope")
 	if err != nil || ok {
 		t.Fatalf("unknown directive: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCreativeInputEditsInvalidateInFlightSteps(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	// Creative input changes bump the revision, so a step that
+	// snapshotted the old rules fails its commit check.
+	id, err := d.CreateDirective(ctx, "A hard rule.", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := d.GetMeta(ctx)
+	if meta.Revision != 1 {
+		t.Fatalf("directive add must bump revision: %d", meta.Revision)
+	}
+	att, _ := d.BeginAttempt(ctx, 1)
+	if _, err := d.UpdateDirectiveText(ctx, id, "Reworded rule."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CommitStep(ctx, CommitPlan{
+		AttemptID: att, BaseRevision: meta.Revision, Summary: "stale",
+		Events: []CommittedEvent{{Type: "t", Title: "x", Prose: "x"}},
+	}); !errors.Is(err, ErrStaleRevision) {
+		t.Fatalf("stale commit after reword: %v", err)
+	}
+
+	// Rewording resets the assessment status: an old verdict does not
+	// describe new text.
+	att, _ = d.BeginAttempt(ctx, 1)
+	if _, err := d.CommitStep(ctx, CommitPlan{
+		AttemptID: att, BaseRevision: 2, Summary: "verdict",
+		Events: []CommittedEvent{{Type: "t", Title: "x", Prose: "x",
+			Changes: []domain.Change{{Object: "directive", ObjectID: domain.ID(id), Op: "set_status", Patch: map[string]any{"status": "fulfilled"}}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.UpdateDirectiveText(ctx, id, "Even newer text."); err != nil {
+		t.Fatal(err)
+	}
+	dirs, _ := d.ListDirectives(ctx)
+	for _, dd := range dirs {
+		if dd.ID == id && dd.Status != "pending" {
+			t.Fatalf("reword kept stale status: %+v", dd)
+		}
+	}
+
+	// Reference edits bump too; failed no-op edits do not.
+	revBefore, _ := d.GetMeta(ctx)
+	if _, err := d.CreateReference(ctx, domain.ReferenceDoc{
+		Scope: "world", Title: "Rules", Body: "No magic.", Binding: true, Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if meta, _ := d.GetMeta(ctx); meta.Revision != revBefore.Revision+1 {
+		t.Fatalf("reference add must bump revision: %d", meta.Revision)
+	}
+	if ok, err := d.UpdateReference(ctx, domain.ReferenceDoc{
+		ID: "ref-999999", Scope: "world", Title: "x", Body: "y", Enabled: true,
+	}); err != nil || ok {
+		t.Fatalf("unknown reference update: ok=%v err=%v", ok, err)
+	}
+	if meta, _ := d.GetMeta(ctx); meta.Revision != revBefore.Revision+1 {
+		t.Fatalf("no-op edit bumped revision: %d", meta.Revision)
 	}
 }
 
