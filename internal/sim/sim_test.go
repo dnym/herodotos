@@ -132,6 +132,33 @@ func TestPartialAcceptanceKeepsMemory(t *testing.T) {
 	}
 }
 
+func TestEntityMoveVisibleToDestinationRegion(t *testing.T) {
+	db, ctx := setup(t)
+	// The queen leaves Aelmark for the principality; the engine, not a
+	// logographer, adjudicates the move.
+	orchMove := `{"notes":"The queen flees north.","events":[{"origin":"orchestrator","type":"movement","title":"The queen crosses the march","prose":"Elinor leaves the capital for Brannholm.","changes":[{"object":"entity","object_id":"q-elinor","op":"upsert","patch":{"region_id":"prin-b"}}]}]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchMove},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Entities["q-elinor"].RegionID != "prin-b" {
+		t.Fatalf("canonical location unchanged: %+v", snap.Entities["q-elinor"])
+	}
+	// Next step: the destination historian sees her, the origin one does not.
+	if p := nextStepPrompt(t, db, ctx, "prin-b"); !strings.Contains(p, "Queen Elinor") {
+		t.Error("moved entity not visible to destination region")
+	}
+	if p := nextStepPrompt(t, db, ctx, "king-a"); strings.Contains(p, "Queen Elinor") {
+		t.Error("moved entity still visible to origin region")
+	}
+}
+
 func nextStepPrompt(t *testing.T, db *store.DB, ctx context.Context, regionID string) string {
 	t.Helper()
 	snap, err := db.LoadSnapshot(ctx)

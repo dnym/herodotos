@@ -59,6 +59,9 @@ Hard rules:
   Without a travel connection, news is slow: choose larger numbers.
 - Reference only ids present in your context, except "upsert", which may
   introduce a new entity id (^[a-z0-9-]+$) located in your region.
+- "upsert" of an existing entity id merges attributes (null deletes a
+  key) and may move the entity: "region_id" names the destination
+  region. Do not put "region_id" in "set_attrs" patches.
 - Directives come from the creative director, not from history. Hard
   directives must be respected when possible; soft directives are
   preferences. Never force an outcome established history makes

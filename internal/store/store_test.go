@@ -250,3 +250,62 @@ func TestPatchSemantics(t *testing.T) {
 		t.Fatalf("entity upsert failed: %+v ok=%v", e, ok)
 	}
 }
+
+func TestEntityMoveAndAttrMerge(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	ctx2 := ctx
+	// Seed an attribute the move patch will not mention.
+	att, _ := d.BeginAttempt(ctx2, 1)
+	if _, err := d.CommitStep(ctx2, CommitPlan{
+		AttemptID: att, BaseRevision: 0, Summary: "seed",
+		Events: []CommittedEvent{{Type: "t", Title: "seed", Prose: "x",
+			Changes: []domain.Change{
+				{Object: "entity", ObjectID: "q-elinor", Op: "set_attrs",
+					Patch: map[string]any{"health": "failing"}},
+			}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Move the queen to prin-b with a minimal patch: location column
+	// must change and untouched attrs must survive.
+	att, _ = d.BeginAttempt(ctx2, 2)
+	if _, err := d.CommitStep(ctx2, CommitPlan{
+		AttemptID: att, BaseRevision: 1, Summary: "move",
+		Events: []CommittedEvent{{Type: "t", Title: "flight", Prose: "x",
+			Changes: []domain.Change{
+				{Object: "entity", ObjectID: "q-elinor", Op: "upsert",
+					Patch: map[string]any{"region_id": "prin-b", "escort": 12}},
+			}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snap, _ := d.LoadSnapshot(ctx2)
+	e := snap.Entities["q-elinor"]
+	if e.RegionID != "prin-b" {
+		t.Fatalf("canonical location after move: %+v", e)
+	}
+	if e.Attrs["health"] != "failing" || e.Attrs["escort"] != float64(12) {
+		t.Fatalf("attrs must merge, not replace: %v", e.Attrs)
+	}
+
+	// set_attrs posing as movement is rejected outright.
+	att, _ = d.BeginAttempt(ctx2, 3)
+	if _, err := d.CommitStep(ctx2, CommitPlan{
+		AttemptID: att, BaseRevision: 2, Summary: "fake move",
+		Events: []CommittedEvent{{Type: "t", Title: "x", Prose: "x",
+			Changes: []domain.Change{
+				{Object: "entity", ObjectID: "q-elinor", Op: "set_attrs",
+					Patch: map[string]any{"region_id": "king-a"}},
+			}}},
+	}); err == nil {
+		t.Fatal("set_attrs with region_id accepted at commit")
+	}
+	snap, _ = d.LoadSnapshot(ctx2)
+	if snap.Entities["q-elinor"].RegionID != "prin-b" {
+		t.Fatal("rejected move changed canonical state")
+	}
+	if snap.Meta.Revision != 2 {
+		t.Fatalf("failed commit bumped revision: %d", snap.Meta.Revision)
+	}
+}

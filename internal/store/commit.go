@@ -273,9 +273,15 @@ func applyEntityChange(ctx context.Context, tx execer, eventID string, ch domain
 		if k != "person" && k != "group" && k != "org" && k != "settlement" && k != "polity" {
 			return fmt.Errorf("entity upsert %s: invalid kind %q", ch.ObjectID, k)
 		}
+		newRegion := nullable(stringPatch(ch.Patch, "region_id"))
+		if rid := stringPatch(ch.Patch, "region_id"); rid != "" {
+			if _, err := tx.ExecContext(ctx, `SELECT 1 FROM regions WHERE id = ?`, rid); err != nil {
+				return fmt.Errorf("entity upsert %s: region %s: %w", ch.ObjectID, rid, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO entities(id, kind, name, region_id, status, attrs) VALUES (?, ?, ?, ?, 'active', ?)`,
-			ch.ObjectID, k, n, nullable(stringPatch(ch.Patch, "region_id")), jsonOf(attrsFromPatch(ch.Patch))); err != nil {
+			ch.ObjectID, k, n, newRegion, jsonOf(attrsFromPatch(ch.Patch))); err != nil {
 			return err
 		}
 		return logStateChange(ctx, tx, eventID, ch, nil)
@@ -285,6 +291,11 @@ func applyEntityChange(ctx context.Context, tx execer, eventID string, ch domain
 	}
 	switch ch.Op {
 	case "set_attrs":
+		if _, bad := ch.Patch["region_id"]; bad {
+			// A region_id in attrs would pose as a location while the
+			// canonical column stayed put; movement is upsert's job.
+			return fmt.Errorf("entity %s: set_attrs may not set region_id; use upsert to move", ch.ObjectID)
+		}
 		merged := mergePatch(decodeAttrs(attrs), ch.Patch)
 		if n, ok := ch.Patch["name"].(string); ok && n != "" {
 			if _, err := tx.ExecContext(ctx, `UPDATE entities SET attrs = ?, name = ? WHERE id = ?`, jsonOf(merged), n, ch.ObjectID); err != nil {
@@ -304,17 +315,36 @@ func applyEntityChange(ctx context.Context, tx execer, eventID string, ch domain
 		}
 		return logStateChange(ctx, tx, eventID, ch, map[string]any{"status": status})
 	case "upsert":
-		newAttrs := jsonOf(attrsFromPatch(ch.Patch))
+		// Existing entity: merge attrs (a minimal patch must not erase
+		// established capabilities) and honor region_id as a move of
+		// the canonical location column.
+		merged := mergePatch(decodeAttrs(attrs), attrsFromPatch(ch.Patch))
+		newAttrs := jsonOf(merged)
+		newRegion := region // current location unless the patch moves it
+		regionArg := any(nil)
+		if rid := stringPatch(ch.Patch, "region_id"); rid != "" && rid != region.String {
+			if _, err := tx.ExecContext(ctx, `SELECT 1 FROM regions WHERE id = ?`, rid); err != nil {
+				return fmt.Errorf("entity move %s: destination region %s: %w", ch.ObjectID, rid, err)
+			}
+			newRegion = sql.NullString{String: rid, Valid: true}
+			regionArg = rid
+		}
 		var nameArg any
 		if n := stringPatch(ch.Patch, "name"); n != "" {
 			nameArg = n
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE entities SET attrs = ?, name = COALESCE(?, name) WHERE id = ?`,
-			newAttrs, nameArg, ch.ObjectID); err != nil {
+			`UPDATE entities SET attrs = ?, name = COALESCE(?, name), region_id = COALESCE(?, region_id) WHERE id = ?`,
+			newAttrs, nameArg, regionArg, ch.ObjectID); err != nil {
 			return err
 		}
-		return logStateChange(ctx, tx, eventID, ch, decodeAttrs(attrs))
+		// Audit before-image carries the old attrs and, on a move, the
+		// old canonical location.
+		before := decodeAttrs(attrs)
+		if region.Valid && newRegion.String != region.String {
+			before["region_id"] = region.String
+		}
+		return logStateChange(ctx, tx, eventID, ch, before)
 	default:
 		return fmt.Errorf("entity %s: unsupported op %q", ch.ObjectID, ch.Op)
 	}

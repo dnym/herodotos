@@ -501,6 +501,14 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 				}
 			} else if e.RegionID != authorRegion {
 				return fmt.Errorf("entity %q is not yours to change", ch.ObjectID)
+			} else if rid, _ := ch.Patch["region_id"].(string); rid != "" {
+				// Movement: only upsert updates the canonical location.
+				if ch.Op == "set_attrs" {
+					return fmt.Errorf("entity %q: set_attrs may not set region_id; use upsert to move", ch.ObjectID)
+				}
+				if pv.Snap.Regions[rid] == nil {
+					return fmt.Errorf("entity %q: destination region %q does not exist", ch.ObjectID, rid)
+				}
 			}
 		case "relationship":
 			r := pv.Snap.Relationships[ch.ObjectID]
@@ -569,8 +577,17 @@ func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 				return fmt.Errorf("region %q does not exist", ch.ObjectID)
 			}
 		case "entity":
-			if pv.Snap.Entities[ch.ObjectID] == nil && ch.Op != "upsert" {
+			e := pv.Snap.Entities[ch.ObjectID]
+			if e == nil && ch.Op != "upsert" {
 				return fmt.Errorf("entity %q does not exist", ch.ObjectID)
+			}
+			if rid, _ := ch.Patch["region_id"].(string); rid != "" {
+				if e != nil && ch.Op == "set_attrs" {
+					return fmt.Errorf("entity %q: set_attrs may not set region_id; use upsert to move", ch.ObjectID)
+				}
+				if pv.Snap.Regions[rid] == nil {
+					return fmt.Errorf("entity %q: destination region %q does not exist", ch.ObjectID, rid)
+				}
 			}
 		case "relationship":
 			if pv.Snap.Relationships[ch.ObjectID] == nil && ch.Op != "upsert" {

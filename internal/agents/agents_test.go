@@ -90,6 +90,28 @@ func TestValidateLogographerProposal(t *testing.T) {
 	if err := pv.ValidateFinalEvent(relGood); err != nil {
 		t.Errorf("valid status rejected in final event: %v", err)
 	}
+
+	// Movement: upsert may move an entity of yours to an existing
+	// region; set_attrs may not pose as movement.
+	moveOK := &domain.PropEvent{Title: "t", Prose: "p", Changes: []domain.Change{{Object: "entity", ObjectID: "q-elinor", Op: "upsert", Patch: map[string]any{"region_id": "prin-b"}}}}
+	if err := pv.ValidateLogographerProposal("king-a", moveOK); err != nil {
+		t.Errorf("valid move rejected: %v", err)
+	}
+	fakeMove := &domain.PropEvent{Title: "t", Prose: "p", Changes: []domain.Change{{Object: "entity", ObjectID: "q-elinor", Op: "set_attrs", Patch: map[string]any{"region_id": "prin-b"}}}}
+	err = pv.ValidateLogographerProposal("king-a", fakeMove)
+	if err == nil {
+		t.Fatal("set_attrs with region_id accepted")
+	}
+	if !strings.Contains(err.Error(), "use upsert to move") {
+		t.Errorf("rejection must teach the mechanism: %v", err)
+	}
+	ghostDest := &domain.PropEvent{Title: "t", Prose: "p", Changes: []domain.Change{{Object: "entity", ObjectID: "q-elinor", Op: "upsert", Patch: map[string]any{"region_id": "nowhere"}}}}
+	if err := pv.ValidateLogographerProposal("king-a", ghostDest); err == nil {
+		t.Fatal("move to unknown region accepted")
+	}
+	if err := pv.ValidateFinalEvent(ghostDest); err == nil {
+		t.Fatal("move to unknown region accepted in final event")
+	}
 }
 
 func TestDetectInteractions(t *testing.T) {
