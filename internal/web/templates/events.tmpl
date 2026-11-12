@@ -4,29 +4,39 @@
 <h1>Committed timeline</h1>
 
 <form method="get" action="/events" class="filter">
-  <label>region filter:
+  <label>region:
     <input type="text" name="region" value="{{$d.Region}}" placeholder="all regions">
   </label>
-  <button type="submit">apply</button>
+  <button type="submit" class="secondary">filter</button>
 </form>
 
-{{if not $d.Events}}<p class="hint">No committed events{{if $d.Region}} for region {{$d.Region}}{{end}}.</p>{{end}}
+{{if not $d.Groups}}
+<p class="hint">No committed events{{if $d.Region}} for region {{$d.Region}}{{end}}.</p>
+{{end}}
+{{range $g := $d.Groups}}
+<h3 class="stephead">step {{$g.Step}}{{with $g.Date}}, {{.}}{{end}}</h3>
 <ul class="events">
-  {{range $row := $d.Events}}
-  <li>
-    <span class="step">step {{$row.Event.Step}}</span>
-    <span class="type">{{$row.Event.Type}}</span>
-    <strong>{{$row.Event.Title}}</strong>
-    <p>{{$row.Event.Prose}}</p>
-    <p class="ids">
+  {{range $row := $g.Events}}
+  <li id="{{$row.Event.ID}}">
+    <div class="title"><a href="/event?id={{$row.Event.ID}}">{{$row.Event.Title}}</a></div>
+    <div class="prose"><p>{{$row.Event.Prose}}</p></div>
+    <div class="meta-line">
       <code>{{$row.Event.ID}}</code>
-      {{if $row.Regions}} &middot; regions: {{$row.Regions}}{{end}}
-      {{if $row.Entities}} &middot; entities: {{$row.Entities}}{{end}}
-      {{if $row.Causes}} &middot; causes: {{$row.Causes}}{{end}}
-    </p>
+      <span class="tag">{{$row.Event.Type}}</span>
+      {{if $row.Causes}}<span class="rel">arose from</span>
+        {{range $c := $row.Causes}}<a class="chip" href="/event?id={{$c}}">{{$c}}</a>{{end}}
+      {{end}}
+      {{if $row.Regions}}<span class="rel">regions</span>
+        {{range $rg := $row.Regions}}<a class="chip" href="/events?region={{$rg}}">{{$rg}}</a>{{end}}
+      {{end}}
+      {{if $row.Entities}}<span class="rel">entities</span>
+        {{range $en := $row.Entities}}<code>{{$en}}</code>{{end}}
+      {{end}}
+    </div>
   </li>
   {{end}}
 </ul>
+{{end}}
 
 <p class="paging">
   {{if ge $d.Offset $d.Limit}}<a href="/events?limit={{$d.Limit}}&offset={{sub $d.Offset $d.Limit}}{{with $d.Region}}&region={{.}}{{end}}">&larr; newer</a>{{end}}

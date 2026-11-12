@@ -5,14 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}} — herodotos</title>
   <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js" defer></script>
 </head>
 <body>
 <header class="top">
   <span class="brand"><a href="/">herodotos</a></span>
   <nav>
-    <a href="/">overview</a>
-    <a href="/events">timeline</a>
-    <a href="/attempts">attempts</a>
+    <a href="/"{{if eq .Section "overview"}} class="current"{{end}}>overview</a>
+    <a href="/events"{{if eq .Section "events"}} class="current"{{end}}>timeline</a>
+    <a href="/attempts"{{if eq .Section "attempts"}} class="current"{{end}}>attempts</a>
   </nav>
 </header>
 <main>

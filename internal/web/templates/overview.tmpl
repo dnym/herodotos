@@ -1,21 +1,30 @@
 {{template "header" .}}
 
 {{$d := .Inner}}
-<section class="meta">
-  <h1>{{$d.Snap.Meta.WorldName}}</h1>
-  <p>{{$d.Date}} &middot; {{$d.Snap.Meta.StepDays}}-day steps &middot;
-     {{$d.Snap.Meta.Revision}} committed revision(s)</p>
+<section class="hero">
+  <div class="hero-grid">
+    <div>
+      <h1>{{$d.Snap.Meta.WorldName}}</h1>
+      <p class="facts">{{$d.Snap.Meta.Revision}} committed revision(s){{if $d.Pending}} ·
+        <a href="/attempts">{{$d.Pending}} report(s) still in transit</a>{{end}}</p>
+    </div>
+    <div class="clock">
+      <span class="date">{{$d.Date}}</span>
+      <span class="sub">step {{$d.Snap.Meta.ClockStep}} · {{$d.Snap.Meta.StepDays}}-day steps</span>
+    </div>
+  </div>
   {{if $d.HasStep}}
-  <form method="post" action="/step" class="stepform">
+  <form method="post" action="/step" class="stepform"
+        hx-post="/step"
+        hx-on::before-request="this.querySelector('button').disabled = true">
     <button type="submit">advance one step</button>
-    <span class="hint">one bounded attempt; failures leave history untouched</span>
+    <span class="htmx-indicator">the logographers are conferring — a live step takes minutes</span>
   </form>
   {{else}}
   <p class="hint">no inference configured — start <code>serve</code> with
   <code>HERODOTOS_INFERENCE_BASE_URL</code>/<code>HERODOTOS_INFERENCE_MODEL</code>
   (or <code>--scripted</code>) to advance the world from here</p>
   {{end}}
-  {{if $d.Pending}}<p class="hint">{{$d.Pending}} report(s) still in transit</p>{{end}}
 </section>
 
 <section>
@@ -24,11 +33,11 @@
     <tr><th>id</th><th>name</th><th>status</th><th>canonical conditions</th><th>memory</th></tr>
     {{range $id, $r := $d.Snap.Regions}}
     <tr>
-      <td><code>{{$id}}</code></td>
+      <td><a class="chip" href="/events?region={{$id}}">{{$id}}</a></td>
       <td>{{$r.Name}}</td>
       <td class="status-{{$r.Status}}">{{$r.Status}}</td>
-      <td class="attrs">{{$r.Attrs}}</td>
-      <td>{{with index $d.Snap.Memories $id}}{{.Summary}}{{end}}</td>
+      <td class="attrs">{{range $a := index $d.Attrs $id}}<div>{{$a}}</div>{{end}}</td>
+      <td class="memory">{{with index $d.Snap.Memories $id}}{{.Summary}}{{end}}</td>
     </tr>
     {{end}}
   </table>
@@ -43,7 +52,7 @@
     <tr>
       <td><code>{{$id}}</code></td>
       <td>{{if $dir.Hard}}hard{{else}}soft{{end}}</td>
-      <td>{{$dir.Status}}</td>
+      <td class="status-{{$dir.Status}}">{{$dir.Status}}</td>
       <td>{{$dir.Text}}</td>
     </tr>
     {{end}}
@@ -60,7 +69,7 @@
       <td><code>{{$id}}</code></td>
       <td>{{$e.Kind}}</td>
       <td>{{$e.Name}}</td>
-      <td><code>{{$e.RegionID}}</code></td>
+      <td><a class="chip" href="/events?region={{$e.RegionID}}">{{$e.RegionID}}</a></td>
       <td class="status-{{$e.Status}}">{{$e.Status}}</td>
     </tr>
     {{end}}
@@ -68,20 +77,26 @@
 </section>
 
 <section>
-  <h2>Latest committed events</h2>
-  {{if not $d.Snap.RecentEvents}}<p class="hint">Nothing has happened yet.</p>{{end}}
+  <h2>Latest events</h2>
+  {{if not $d.Snap.RecentEvents}}
+  <p class="hint">Nothing has happened yet. Advance a step to write the first page.</p>
+  {{end}}
   <ul class="events">
     {{range $ev := $d.Snap.RecentEvents}}
     <li>
-      <span class="step">step {{$ev.Step}}</span>
-      <span class="type">{{$ev.Type}}</span>
-      <strong>{{$ev.Title}}</strong>
-      <p>{{$ev.Prose}}</p>
-      <p class="ids">{{$ev.ID}}{{if $ev.CauseIDs}} &middot; causes: {{range $i, $c := $ev.CauseIDs}}{{if $i}}, {{end}}{{$c}}{{end}}{{end}}</p>
+      <div class="title"><a href="/event?id={{$ev.ID}}">{{$ev.Title}}</a></div>
+      <div class="prose"><p>{{$ev.Prose}}</p></div>
+      <div class="meta-line">
+        <span class="tag">{{$ev.Type}}</span>
+        <span class="rel">step {{$ev.Step}}</span>
+        {{if $ev.CauseIDs}}<span class="rel">arose from</span>
+          {{range $c := $ev.CauseIDs}}<a class="chip" href="/event?id={{$c}}">{{$c}}</a>{{end}}
+        {{end}}
+      </div>
     </li>
     {{end}}
   </ul>
-  <p><a href="/events">full timeline &rarr;</a></p>
+  <p class="paging"><a href="/events">full timeline</a></p>
 </section>
 
 {{template "footer" .}}

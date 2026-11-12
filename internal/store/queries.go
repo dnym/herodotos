@@ -125,6 +125,35 @@ type ReportRow struct {
 	EventTitle string
 }
 
+// StateChangeRow is one structured state transition authorized by an event.
+type StateChangeRow struct {
+	Object   string
+	ObjectID string
+	Op       string
+	Patch    string
+	Before   string
+}
+
+// ListStateChanges returns the canonical changes an event applied, in the
+// order they were committed.
+func (d *DB) ListStateChanges(ctx context.Context, eventID domain.ID) ([]StateChangeRow, error) {
+	rows, err := d.sqlDB.QueryContext(ctx,
+		`SELECT object, object_id, op, patch, COALESCE(before,'') FROM state_changes WHERE event_id = ? ORDER BY id`, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StateChangeRow
+	for rows.Next() {
+		var c StateChangeRow
+		if err := rows.Scan(&c.Object, &c.ObjectID, &c.Op, &c.Patch, &c.Before); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ListReports returns all knowledge deliveries, pending and delivered.
 func (d *DB) ListReports(ctx context.Context) ([]ReportRow, error) {
 	rows, err := d.sqlDB.QueryContext(ctx,

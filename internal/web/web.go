@@ -13,6 +13,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +24,7 @@ import (
 	"github.com/dnym/herodotos/internal/store"
 )
 
-//go:embed templates/*.tmpl static/*
+//go:embed templates/*.tmpl all:static
 var assets embed.FS
 
 // Server exposes one world database over HTTP.
@@ -68,6 +69,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.pageOverview)
 	mux.HandleFunc("GET /events", s.pageEvents)
+	mux.HandleFunc("GET /event", s.pageEvent)
 	mux.HandleFunc("GET /attempts", s.pageAttempts)
 	mux.HandleFunc("GET /attempt", s.pageAttempt)
 	mux.HandleFunc("POST /step", s.actionStep)
@@ -80,6 +82,7 @@ func (s *Server) routes() http.Handler {
 
 type pageData struct {
 	Title    string
+	Section  string // highlights the current nav entry
 	Flash    string
 	FlashErr bool
 	Inner    any
@@ -87,12 +90,29 @@ type pageData struct {
 
 func (s *Server) render(w http.ResponseWriter, page, title string, r *http.Request, inner any) {
 	flash, flashErr := notice(r)
+	section := page
+	if page == "attempt" {
+		section = "attempts"
+	}
+	if page == "event" {
+		section = "events"
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.ExecuteTemplate(w, page+".tmpl", pageData{
-		Title: title, Flash: flash, FlashErr: flashErr, Inner: inner,
+		Title: title, Section: section, Flash: flash, FlashErr: flashErr, Inner: inner,
 	}); err != nil {
 		fmt.Println("web: render:", err) // headers may already be sent
 	}
+}
+
+// stepDate formats the in-world date of a step, or "" when the calendar
+// cannot cover it.
+func stepDate(meta domain.Meta, step int) string {
+	t, err := meta.StepDate(step)
+	if err != nil {
+		return ""
+	}
+	return t.Format("2 Jan 2006")
 }
 
 // --- pages ---
@@ -102,6 +122,26 @@ type overviewData struct {
 	Date    string
 	Pending int
 	HasStep bool
+	Attrs   map[domain.ID][]string // region id -> "key: value" lines
+}
+
+// attrLines renders a map as deterministic "key: value" lines; Go map
+// syntax in the UI is noise.
+func attrLines(attrs map[string]any) []string {
+	var lines []string
+	for _, k := range sortedKeys(attrs) {
+		lines = append(lines, fmt.Sprintf("%s: %v", k, attrs[k]))
+	}
+	return lines
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (s *Server) pageOverview(w http.ResponseWriter, r *http.Request) {
@@ -111,11 +151,14 @@ func (s *Server) pageOverview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	date := fmt.Sprintf("clock step %d", snap.Meta.ClockStep)
-	if t, err := snap.Meta.StepDate(snap.Meta.ClockStep); err == nil {
-		date = fmt.Sprintf("clock step %d — %s", snap.Meta.ClockStep, t.Format("2 Jan 2006"))
+	date := stepDate(snap.Meta, snap.Meta.ClockStep)
+	if date == "" {
+		date = "—"
 	}
-	od := overviewData{Snap: snap, HasStep: s.Engine != nil, Date: date}
+	od := overviewData{Snap: snap, HasStep: s.Engine != nil, Date: date, Attrs: map[domain.ID][]string{}}
+	for id, rg := range snap.Regions {
+		od.Attrs[id] = attrLines(rg.Attrs)
+	}
 	if reports, err := s.DB.ListReports(ctx); err == nil {
 		for _, rp := range reports {
 			if rp.Report.DeliveredStep == 0 {
@@ -127,11 +170,18 @@ func (s *Server) pageOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 type eventsData struct {
-	Events []eventRow
+	Groups []stepGroup
 	Region string
 	Offset int
 	Limit  int
 	More   bool
+}
+
+// stepGroup bundles one step's events under its in-world date.
+type stepGroup struct {
+	Step   int
+	Date   string
+	Events []eventRow
 }
 
 func (s *Server) pageEvents(w http.ResponseWriter, r *http.Request) {
@@ -147,25 +197,84 @@ func (s *Server) pageEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	rows := make([]eventRow, 0, len(evs))
-	for _, ev := range evs {
-		rows = append(rows, eventRow{
+	meta, err := s.DB.GetMeta(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var groups []stepGroup
+	lastStep := -1
+	for _, ev := range evs { // newest first
+		if len(groups) == 0 || ev.Step != lastStep {
+			groups = append(groups, stepGroup{Step: ev.Step, Date: stepDate(meta, ev.Step)})
+			lastStep = ev.Step
+		}
+		g := &groups[len(groups)-1]
+		g.Events = append(g.Events, eventRow{
 			Event:    ev,
-			Regions:  strings.Join(ev.RegionIDs, ", "),
-			Entities: strings.Join(ev.EntityIDs, ", "),
-			Causes:   strings.Join(ev.CauseIDs, ", "),
+			Regions:  ev.RegionIDs,
+			Entities: ev.EntityIDs,
+			Causes:   ev.CauseIDs,
 		})
 	}
 	s.render(w, "events", "Timeline", r, eventsData{
-		Events: rows, Region: region, Offset: offset, Limit: limit,
+		Groups: groups, Region: region, Offset: offset, Limit: limit,
 		More: len(evs) == limit,
 	})
 }
 
 type eventRow struct {
-	Event              domain.Event
-	Regions, Entities string
-	Causes             string
+	Event             domain.Event
+	Regions, Entities []domain.ID
+	Causes            []domain.ID
+}
+
+func (s *Server) pageEvent(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if !domain.ValidID(id) {
+		http.Redirect(w, r, "/events", http.StatusSeeOther)
+		return
+	}
+	ctx := r.Context()
+	ev, err := s.DB.GetEvent(ctx, domain.ID(id))
+	if err != nil {
+		http.Error(w, "no such event", http.StatusNotFound)
+		return
+	}
+	meta, _ := s.DB.GetMeta(ctx)
+	changes, err := s.DB.ListStateChanges(ctx, ev.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	allReports, _ := s.DB.ListReports(ctx)
+	var reports []store.ReportRow
+	for _, rp := range allReports {
+		if rp.Report.EventID == ev.ID {
+			reports = append(reports, rp)
+		}
+	}
+	s.render(w, "event", ev.Title, r, struct {
+		Event       domain.Event
+		Date        string
+		Changes     []store.StateChangeRow
+		Reports     []store.ReportRow
+		RegionNames map[domain.ID]string
+	}{
+		Event: ev, Date: stepDate(meta, ev.Step),
+		Changes: changes, Reports: reports,
+		RegionNames: regionNames(ctx, s.DB),
+	})
+}
+
+func regionNames(ctx context.Context, db *store.DB) map[domain.ID]string {
+	out := map[domain.ID]string{}
+	if regions, err := db.ListRegions(ctx); err == nil {
+		for _, rg := range regions {
+			out[rg.ID] = rg.Name
+		}
+	}
+	return out
 }
 
 type attemptsData struct {
@@ -221,19 +330,25 @@ func (s *Server) actionStep(w http.ResponseWriter, r *http.Request) {
 		redirectFlash(w, r, "/attempts", "step not committed: "+err.Error(), true)
 		return
 	}
-	redirectFlash(w, r, "/", fmt.Sprintf(
-		"step %d committed: %d event(s), %d model call(s)", res.Step, len(res.EventIDs), res.ModelCalls), false)
+	msg := fmt.Sprintf("step %d committed: %d event(s), %d model call(s)", res.Step, len(res.EventIDs), res.ModelCalls)
+	redirectFlash(w, r, "/", msg, false)
 }
 
-// --- helpers ---
-
+// redirectFlash sends the browser (or htmx, via HX-Redirect) to a page
+// carrying a one-shot notice in the query string.
 func redirectFlash(w http.ResponseWriter, r *http.Request, path, msg string, isErr bool) {
 	q := url.Values{}
 	if isErr {
 		msg = "! " + msg // notice() reads the "!" prefix as the error flag
 	}
 	q.Set("flash", msg)
-	http.Redirect(w, r, path+"?"+q.Encode(), http.StatusSeeOther)
+	loc := path + "?" + q.Encode()
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", loc)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	http.Redirect(w, r, loc, http.StatusSeeOther)
 }
 
 func notice(r *http.Request) (string, bool) {

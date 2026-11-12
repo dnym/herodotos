@@ -47,8 +47,11 @@ herodotos inspect --db world.db
 
 `serve` shows the world overview, timeline, and per-attempt diagnostics
 (proposals, model calls, tokens, errors), and can advance one step per
-request while inference is configured. Exactly one process may hold a
-world database at a time; others exit with a clear lock error.
+request while inference is configured; the step button reports progress
+in-place via the vendored HTMX (a live step can run for minutes). The
+prose UI is set in vendored EB Garamond (SIL OFL 1.1). No external
+assets are fetched at runtime. Exactly one process may hold a world
+database at a time; others exit with a clear lock error.
 
 ## Repository layout
 

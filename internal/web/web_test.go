@@ -121,10 +121,70 @@ func TestPagesRender(t *testing.T) {
 		}
 	}
 	get(t, ts, "/events", http.StatusOK)
+	get(t, ts, "/events?region=king-a", http.StatusOK)
 	get(t, ts, "/attempts", http.StatusOK)
 	get(t, ts, "/attempt?id=att-000001", http.StatusOK)
 	get(t, ts, "/nope", http.StatusNotFound)
 	get(t, ts, "/static/style.css", http.StatusOK)
+	get(t, ts, "/static/htmx.min.js", http.StatusOK)
+	get(t, ts, "/event?id=evt-000001", http.StatusNotFound) // nothing committed yet
+}
+
+func TestHXStepReturnsRedirect(t *testing.T) {
+	s := newTestServer(t, true)
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/step", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("HX-Request", "true")
+	resp, err := (&http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("HX step status = %d", resp.StatusCode)
+	}
+	loc := resp.Header.Get("HX-Redirect")
+	if !strings.Contains(loc, "flash=step+1+committed") {
+		t.Fatalf("HX-Redirect: %q", loc)
+	}
+	// htmx clients get a full refresh; the flash must carry the result.
+	body := getAbs(t, ts, loc, http.StatusOK)
+	if !strings.Contains(body, "step 1 committed") {
+		t.Errorf("refreshed overview missing flash")
+	}
+}
+
+func TestEventDetailPage(t *testing.T) {
+	s := newTestServer(t, true)
+	// Swap in a step that actually commits an event with a delivery.
+	s.Engine.Client = &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: `{"prose":"p","events":[{"type":"development","title":"Riot in the capital","prose":"Crowds gather.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"delivery":{"prin-b":3}}]}`},
+		{Role: "logographer:prin-b", Text: `{"prose":"q","events":[]}`},
+		{Role: "orchestrator", Text: `{"notes":"ok","events":[{"origin":"king-a","type":"development","title":"Riot in the capital","prose":"Crowds gather.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"delivery":{"prin-b":3}}]}`},
+	}}
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	resp := postNoRedirect(t, ts, "/step")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("step status = %d", resp.StatusCode)
+	}
+	body := get(t, ts, "/event?id=evt-000001", http.StatusOK)
+	for _, want := range []string{"Riot in the capital", "opened a new thread", "unrest", "in transit", "prin-b"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("event page missing %q", want)
+		}
+	}
+	get(t, ts, "/event?id=evt-999999", http.StatusNotFound)
+	get(t, ts, "/event", http.StatusOK) // no id: redirects to the timeline
 }
 
 func TestStepActionCommitsAndFailsCleanly(t *testing.T) {

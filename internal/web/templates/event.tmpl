@@ -1,0 +1,60 @@
+{{template "header" .}}
+
+{{$d := .Inner}}
+{{$ev := $d.Event}}
+<h1>{{$ev.Title}}</h1>
+<div class="meta-line">
+  <code>{{$ev.ID}}</code>
+  <span class="tag">{{$ev.Type}}</span>
+  <span class="rel">step {{$ev.Step}}{{with $d.Date}}, {{.}}{{end}}</span>
+</div>
+<div class="prose"><p>{{$ev.Prose}}</p></div>
+
+<dl class="facts-inline">
+  <dt>regions</dt>
+  <dd>{{if $ev.RegionIDs}}{{range $rg := $ev.RegionIDs}}<a class="chip" href="/events?region={{$rg}}">{{$rg}}</a> {{end}}{{else}}—{{end}}</dd>
+  <dt>entities</dt>
+  <dd>{{if $ev.EntityIDs}}{{range $en := $ev.EntityIDs}}<code>{{$en}}</code> {{end}}{{else}}—{{end}}</dd>
+  <dt>arose from</dt>
+  <dd>{{if $ev.CauseIDs}}{{range $c := $ev.CauseIDs}}<a class="chip" href="/event?id={{$c}}">{{$c}}</a> {{end}}{{else}}— this step opened a new thread{{end}}</dd>
+</dl>
+
+<section>
+  <h2>Canonical changes</h2>
+  {{if not $d.Changes}}<p class="hint">This event committed no structured state changes.</p>{{end}}
+  {{if $d.Changes}}
+  <table>
+    <tr><th>object</th><th>id</th><th>op</th><th>patch</th><th>before</th></tr>
+    {{range $c := $d.Changes}}
+    <tr>
+      <td>{{$c.Object}}</td>
+      <td><code>{{$c.ObjectID}}</code></td>
+      <td>{{$c.Op}}</td>
+      <td><code>{{$c.Patch}}</code></td>
+      <td><code>{{$c.Before}}</code></td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<section>
+  <h2>News carried</h2>
+  {{if not $d.Reports}}<p class="hint">Every nearby region learned of this directly; no reports were dispatched.</p>{{end}}
+  {{if $d.Reports}}
+  <table>
+    <tr><th>to region</th><th>earliest step</th><th>delivered</th></tr>
+    {{range $rp := $d.Reports}}
+    <tr>
+      <td><a class="chip" href="/events?region={{$rp.Report.TargetRegionID}}">{{$rp.Report.TargetRegionID}}</a></td>
+      <td>{{$rp.Report.EarliestStep}}</td>
+      <td>{{if $rp.Report.DeliveredStep}}step {{$rp.Report.DeliveredStep}}{{else}}<span class="status-pending">in transit</span>{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<p class="paging"><a href="/events">timeline</a></p>
+
+{{template "footer" .}}
