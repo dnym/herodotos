@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/dnym/herodotos/internal/domain"
@@ -226,17 +227,22 @@ func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.Log
 			fmt.Fprintf(&b, "- %s [%s/%s]: %s\n", d.ID, kind, d.Status, d.Text)
 		}
 	})
-	writeSection(&b, "REFERENCE DOCUMENTS", func() {
-		for _, ref := range v.Refs {
-			body := ref.Body
-			if len(body) > 1200 {
-				body = body[:1200] + "...[truncated]"
+	writeSection(&b, "REFERENCE DOCUMENTS (human-authored background)", func() {
+		for _, ref := range v.Bindings {
+			fmt.Fprintf(&b, "- %s (%s/BINDING): %s\n%s\n", ref.ID, ref.Scope, ref.Title, refBody(ref))
+		}
+		for _, ref := range v.Retrieved {
+			fmt.Fprintf(&b, "- %s (%s/matched to current events): %s\n%s\n", ref.ID, ref.Scope, ref.Title, refBody(ref))
+		}
+		if len(v.Catalog) > 0 {
+			b.WriteString("Catalog (listed for background awareness; full text not loaded this step):\n")
+			for _, ref := range v.Catalog {
+				fmt.Fprintf(&b, "- %s (%s): %s", ref.ID, ref.Scope, ref.Title)
+				if ref.Description != "" {
+					fmt.Fprintf(&b, " — %s", ref.Description)
+				}
+				b.WriteString("\n")
 			}
-			flag := "advisory"
-			if ref.Binding {
-				flag = "BINDING"
-			}
-			fmt.Fprintf(&b, "- %s (%s/%s): %s\n%s\n", ref.ID, ref.Scope, flag, ref.Title, body)
 		}
 	})
 	b.WriteString("\nAdvance this world one step as the historian of your region. Reply with the JSON object only.")
@@ -246,6 +252,16 @@ func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.Log
 			"Advance this world one step as the historian of your region. Reply with the JSON object only."
 	}
 	return out
+}
+
+// refBody renders a reference body with a display cap; the cap keeps a
+// single oversized document from crowding out the rest of the prompt.
+func refBody(ref domain.ReferenceDoc) string {
+	body := strings.TrimSpace(ref.Body)
+	if len(body) > 1200 {
+		body = body[:1200] + "...[truncated]"
+	}
+	return body
 }
 
 // RenderOrchestratorPrompt builds the adjudication context: everything,
@@ -274,6 +290,27 @@ func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Sna
 				kind = "hard"
 			}
 			fmt.Fprintf(&b, "- %s [%s/%s]: %s\n", d.ID, kind, d.Status, d.Text)
+		}
+	})
+	writeSection(&b, "BINDING REFERENCES (world rules: adjudicate against these)", func() {
+		for _, ref := range snap.WorldRefs {
+			if !ref.Binding {
+				continue
+			}
+			fmt.Fprintf(&b, "- %s (world): %s\n%s\n", ref.ID, ref.Title, refBody(ref))
+		}
+		var regionIDs []string
+		for id := range snap.RegionRefs {
+			regionIDs = append(regionIDs, id)
+		}
+		sort.Strings(regionIDs)
+		for _, id := range regionIDs {
+			for _, ref := range snap.RegionRefs[id] {
+				if !ref.Binding {
+					continue
+				}
+				fmt.Fprintf(&b, "- %s (region %s): %s\n%s\n", ref.ID, id, ref.Title, refBody(ref))
+			}
 		}
 	})
 	writeSection(&b, "RECENT CANONICAL EVENTS", func() {

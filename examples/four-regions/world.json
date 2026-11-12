@@ -80,6 +80,7 @@
       "scope": "world",
       "binding": true,
       "title": "Binding world rules",
+      "description": "Hard world rules: travel times, technology ceiling, and what knowledge can spread",
       "body": "No gunpowder, no printing press, no epidemic spreads faster than people and goods travel. Distances measured in the connections list bound how fast news, armies, and ideas move. A region's inhabitants act on what they could plausibly know, never on facts still in transit.",
       "keywords": "technology travel knowledge"
     },
@@ -88,6 +89,7 @@
       "scope": "region",
       "region_id": "kingdom-a",
       "title": "Aelmark chronicle",
+      "description": "Background on Aelmark succession customs, grain stores, and kept promises",
       "body": "Aelmark's crown passes by senior male line, but the succession has twice been settled by acclamation in the granary square when the line was unclear. The great famine of the previous century is remembered as the price of grain hoarding.",
       "keywords": "succession grain memory"
     }

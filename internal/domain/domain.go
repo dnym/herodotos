@@ -164,16 +164,20 @@ type Memory struct {
 	UpdatedStep int      `json:"updated_step"`
 }
 
-// ReferenceDoc is a scoped reference document; binding documents state
-// world rules, others are descriptive background.
+// ReferenceDoc is human-authored reference material scoped to the world
+// or one region: binding rules or advisory knowledge (a skill-style doc
+// whose description is always shown and whose body is loaded on match
+// or on request).
 type ReferenceDoc struct {
-	ID       ID     `json:"id"`
-	Scope    string `json:"scope"` // world, region
-	RegionID ID     `json:"region_id"`
-	Binding  bool   `json:"binding"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	Keywords string `json:"keywords"`
+	ID          ID     `json:"id"`
+	Scope       string `json:"scope"` // world, region
+	RegionID    ID     `json:"region_id"`
+	Binding     bool   `json:"binding"`
+	Enabled     bool   `json:"enabled"`
+	Title       string `json:"title"`
+	Description string `json:"description"` // one line; always visible to scoped agents
+	Body        string `json:"body"`
+	Keywords    string `json:"keywords"`
 }
 
 // Attempt groups all diagnostics of one step execution.

@@ -173,18 +173,22 @@ func (d *DB) LoadSnapshot(ctx context.Context) (*Snapshot, error) {
 	rows.Close()
 
 	rows, err = d.sqlDB.QueryContext(ctx,
-		`SELECT id, scope, COALESCE(region_id,''), binding, title, body, keywords FROM reference_docs ORDER BY id`)
+		`SELECT id, scope, COALESCE(region_id,''), binding, title, body, keywords,
+		        COALESCE(description,''), enabled
+		 FROM reference_docs WHERE enabled = 1 ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var ref domain.ReferenceDoc
-		var binding int
-		if err := rows.Scan(&ref.ID, &ref.Scope, &ref.RegionID, &binding, &ref.Title, &ref.Body, &ref.Keywords); err != nil {
+		var binding, enabled int
+		if err := rows.Scan(&ref.ID, &ref.Scope, &ref.RegionID, &binding, &ref.Title,
+			&ref.Body, &ref.Keywords, &ref.Description, &enabled); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		ref.Binding = binding == 1
+		ref.Enabled = enabled == 1
 		if ref.Scope == "world" {
 			s.WorldRefs = append(s.WorldRefs, ref)
 		} else {

@@ -8,6 +8,10 @@ package knowledge
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"unicode"
 
 	"github.com/dnym/herodotos/internal/domain"
 	"github.com/dnym/herodotos/internal/store"
@@ -32,7 +36,9 @@ type LogographerView struct {
 	Entities      []*domain.Entity
 	Relationships []*domain.Relationship // among visible entities
 	Directives    []domain.Directive
-	Refs          []domain.ReferenceDoc // world-scoped + region-scoped
+	Bindings      []domain.ReferenceDoc // always shown in full: world rules
+	Retrieved     []domain.ReferenceDoc // bodies auto-loaded by keyword match
+	Catalog       []domain.ReferenceDoc // id/title/description only: ask to consult
 	RecentEvents  []domain.Event        // canonical events involving this region
 	AdjacentIDs   []domain.ID           // neighbor identity only, no conditions
 }
@@ -66,9 +72,6 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 	for _, d := range s.Directives {
 		v.Directives = append(v.Directives, *d)
 	}
-	v.Refs = append(v.Refs, s.WorldRefs...)
-	v.Refs = append(v.Refs, s.RegionRefs[regionID]...)
-
 	for _, rep := range s.DeliveredReports[regionID] {
 		note := ReportNote{EventID: rep.EventID, DeliveredStep: rep.DeliveredStep}
 		if ev, err := lookup.GetEvent(ctx, rep.EventID); err == nil {
@@ -86,6 +89,7 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 			}
 		}
 	}
+	classifyReferences(v, s, regionID)
 	for _, c := range s.Connections {
 		if c.A == regionID {
 			v.AdjacentIDs = append(v.AdjacentIDs, c.B)
@@ -98,5 +102,95 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 
 // UnknownRegionError names a missing region.
 type UnknownRegionError struct{ ID domain.ID }
+
+// classifyReferences splits the region-visible references into the
+// three prompt tiers of the skill paradigm: binding documents always
+// appear in full; advisory documents whose keywords match what the
+// region is currently dealing with have their bodies auto-loaded (at
+// most maxRetrieved, best match first); everything else appears in the
+// catalog as id/title/description only, available on request. The
+// scoring is deterministic keyword matching — no inference, no
+// randomness.
+func classifyReferences(v *LogographerView, s *store.Snapshot, regionID domain.ID) {
+	var visible []domain.ReferenceDoc
+	visible = append(visible, s.WorldRefs...)
+	visible = append(visible, s.RegionRefs[regionID]...)
+	if len(visible) == 0 {
+		return
+	}
+
+	hay := strings.ToLower(strings.Join(regionContextText(v), " "))
+	type scored struct {
+		ref   domain.ReferenceDoc
+		score int
+	}
+	var matches []scored
+	for _, ref := range visible {
+		if ref.Binding {
+			v.Bindings = append(v.Bindings, ref)
+			continue
+		}
+		score := 0
+		for _, kw := range refKeywords(ref.Keywords) {
+			if strings.Contains(hay, kw) {
+				score++
+			}
+		}
+		if score > 0 {
+			matches = append(matches, scored{ref, score})
+		} else {
+			v.Catalog = append(v.Catalog, ref)
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].ref.ID < matches[j].ref.ID
+	})
+	for i, m := range matches {
+		if i < maxRetrieved {
+			v.Retrieved = append(v.Retrieved, m.ref)
+		} else {
+			v.Catalog = append(v.Catalog, m.ref)
+		}
+	}
+}
+
+// maxRetrieved bounds how many advisory bodies one prompt may carry.
+const maxRetrieved = 3
+
+func regionContextText(v *LogographerView) []string {
+	texts := []string{string(v.Region.ID), v.Region.Name}
+	for _, a := range v.Region.Attrs {
+		texts = append(texts, fmt.Sprint(a))
+	}
+	for _, e := range v.Entities {
+		texts = append(texts, e.Name)
+	}
+	if v.Memory != nil {
+		texts = append(texts, v.Memory.Summary)
+		texts = append(texts, v.Memory.OpenThreads...)
+	}
+	for _, ev := range v.RecentEvents {
+		texts = append(texts, ev.Title, ev.Prose)
+	}
+	return texts
+}
+
+// refKeywords splits a reference's keyword string into match tokens:
+// lowercase alphanumerics of at least three characters. Two-word
+// phrases do not match; each word does, on its own.
+func refKeywords(s string) []string {
+	var out []string
+	for _, tok := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) {
+		if len(tok) >= 3 {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
 
 func (e *UnknownRegionError) Error() string { return "unknown region " + e.ID }

@@ -59,4 +59,9 @@ Hard rules:
   know. Record beliefs only when they are new or changed — at most 2 per
   reply, each at most 25 words; they persist in your region's records
   without being re-stated.
+- Reference documents come from the creative director as background.
+  BINDING ones are world rules: never propose events or changes that
+  contradict them. Advisory documents (loaded in full when they match
+  your current situation, otherwise listed by description only) keep
+  you grounded: stay consistent with what they state.
 - You may never change directives.

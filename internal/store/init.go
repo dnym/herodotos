@@ -48,13 +48,14 @@ type WorldSpec struct {
 		Hard bool      `json:"hard,omitempty"`
 	} `json:"directives,omitempty"`
 	ReferenceDocs []struct {
-		ID       domain.ID `json:"id"`
-		Scope    string    `json:"scope"`
-		RegionID string    `json:"region_id,omitempty"`
-		Binding  bool      `json:"binding,omitempty"`
-		Title    string    `json:"title"`
-		Body     string    `json:"body"`
-		Keywords string    `json:"keywords,omitempty"`
+		ID          domain.ID `json:"id"`
+		Scope       string    `json:"scope"`
+		RegionID    string    `json:"region_id,omitempty"`
+		Binding     bool      `json:"binding,omitempty"`
+		Title       string    `json:"title"`
+		Description string    `json:"description,omitempty"`
+		Body        string    `json:"body"`
+		Keywords    string    `json:"keywords,omitempty"`
 	} `json:"reference_docs,omitempty"`
 	Memories map[domain.ID]struct {
 		Summary     string   `json:"summary"`
@@ -239,8 +240,9 @@ func (d *DB) InitWorld(ctx context.Context, w *WorldSpec) error {
 			binding = 1
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO reference_docs(id, scope, region_id, binding, title, body, keywords) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			ref.ID, ref.Scope, nullable(ref.RegionID), binding, ref.Title, ref.Body, ref.Keywords); err != nil {
+			`INSERT INTO reference_docs(id, scope, region_id, binding, title, body, keywords, description)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			ref.ID, ref.Scope, nullable(ref.RegionID), binding, ref.Title, ref.Body, ref.Keywords, ref.Description); err != nil {
 			return err
 		}
 	}
