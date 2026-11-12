@@ -67,16 +67,25 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		b = config.DefaultBudgets()
 	}
 
-	snap, err := e.DB.LoadSnapshot(ctx)
+	// Open the attempt first: BeginAttempt marks this boundary's report
+	// deliveries durably, so the snapshot below (and every agent view
+	// built from it) already sees news that has now arrived.
+	meta, err := e.DB.GetMeta(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("snapshot: %w", err)
+		return nil, fmt.Errorf("meta: %w", err)
 	}
-	currentStep := snap.Meta.ClockStep
-	newStep := currentStep + 1
+	newStep := meta.ClockStep + 1
 	attemptID, err := e.DB.BeginAttempt(ctx, newStep)
 	if err != nil {
 		return nil, fmt.Errorf("begin attempt: %w", err)
 	}
+
+	snap, err := e.DB.LoadSnapshot(ctx)
+	if err != nil {
+		e.DB.MarkAttemptFailed(context.WithoutCancel(ctx), attemptID, "snapshot failed")
+		return nil, fmt.Errorf("snapshot: %w", err)
+	}
+	currentStep := snap.Meta.ClockStep
 
 	fail := func(reason string, err error) (*Result, error) {
 		e.DB.MarkAttemptFailed(context.WithoutCancel(ctx), attemptID, reason)

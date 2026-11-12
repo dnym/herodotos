@@ -267,7 +267,38 @@ func TestVisibilitySeparation(t *testing.T) {
 	if len(view.Reports) != 0 {
 		t.Fatal("report visible before delivery")
 	}
-	if _, err := db.BeginAttempt(ctx, 3); err != nil {
+
+	// Run the quiet steps 2 and 3: prin-b's historian must see the news
+	// during step 3 (earliest step 3) and not during step 2.
+	quiet := `{"prose":"quiet","events":[]}`
+	orchNone := `{"notes":"nothing to resolve","events":[]}`
+	fake2 := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: quiet},
+		{Role: "logographer:prin-b", Text: quiet},
+		{Role: "orchestrator", Text: orchNone},
+		{Role: "logographer:king-a", Text: quiet},
+		{Role: "logographer:prin-b", Text: quiet},
+		{Role: "orchestrator", Text: orchNone},
+	}}
+	e2 := &Engine{DB: db, Client: fake2, ModelName: "fake"}
+	for i := 0; i < 2; i++ {
+		if _, err := e2.RunStep(ctx); err != nil {
+			t.Fatalf("quiet step %d: %v", i+2, err)
+		}
+	}
+	quietCalls := fake2.Calls()
+	step2Prompt, step3Prompt := quietCalls[1].Prompt, quietCalls[4].Prompt
+	if strings.Contains(step2Prompt, "Rioting in the capital") {
+		t.Fatal("news visible to prin-b before its earliest step")
+	}
+	if !strings.Contains(step3Prompt, "Rioting in the capital") {
+		t.Fatal("news not delivered to prin-b at its earliest step")
+	}
+	if !strings.Contains(step3Prompt, "DELIVERED REPORTS") {
+		t.Fatal("delivery section missing from prin-b step 3 prompt")
+	}
+
+	if _, err := db.BeginAttempt(ctx, 4); err != nil {
 		t.Fatal(err)
 	}
 	snap, _ = db.LoadSnapshot(ctx)

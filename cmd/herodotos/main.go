@@ -151,16 +151,17 @@ func runRun(ctx context.Context, args []string) error {
 	dbPath := fs.String("db", "world.db", "path to the world database")
 	steps := fs.Int("steps", 1, "number of steps to advance")
 	scripted := fs.String("scripted", "", "replay model replies from a fixture file instead of a live endpoint")
+	// `herodotos run 6 --db x`: a leading bare count reads more naturally
+	// than --steps 6 before the other flags, and Go's flag package stops
+	// parsing at the first positional argument, so normalize it here.
+	if len(args) > 0 && isAllDigits(args[0]) {
+		args = append([]string{fmt.Sprintf("-steps=%s", args[0])}, args[1:]...)
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if rest := fs.Args(); len(rest) == 1 {
-		// tolerate `herodotos run 3`
-		if _, err := fmt.Sscanf(rest[0], "%d", steps); err != nil {
-			return fmt.Errorf("invalid step count %q", rest[0])
-		}
-	} else if len(rest) > 0 {
-		return errors.New("unexpected arguments")
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
 	db, eng, err := openEngine(dbPath, scripted)
 	if err != nil {
@@ -168,6 +169,18 @@ func runRun(ctx context.Context, args []string) error {
 	}
 	defer db.Close()
 	return runSteps(ctx, db, eng, *steps)
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func runSteps(ctx context.Context, db *store.DB, eng *sim.Engine, steps int) error {

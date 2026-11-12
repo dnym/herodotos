@@ -32,6 +32,10 @@ Rules:
   may dictate another region's response. Ask for reactions sparingly and
   only when a real missing decision blocks the step.
 - Accept proposals that do not interact; do not rewrite what works.
+- Preserve causality: when an event follows from a canonical event you
+  were shown, carry the causal event ids in its "causes" list. A step
+  where every event has empty causes usually means you dropped links
+  the proposals already made.
 - Prefer partial, plausible realization of soft directives over
   contrived fulfillment. An outcome is not fulfilled merely because a
   plan exists.
