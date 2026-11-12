@@ -14,6 +14,10 @@
   <p class="runstatus"><span class="pulse"></span>
     Run in progress — {{.StepsDone}} step(s) committed so far.
     Closing this page does not stop it.</p>
+  {{if .RunningID}}
+  <p class="hint livelink"><a href="/attempt?id={{.RunningID}}">watch this step live</a> &mdash;
+    proposals and model calls appear as they land</p>
+  {{end}}
   {{if .PauseReq}}
   <p class="hint">pause requested: the run stops at the next step boundary</p>
   {{else}}

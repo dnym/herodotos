@@ -139,6 +139,22 @@ button.secondary:hover { border-color: var(--accent); color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
 .lastresult { margin-top: .6rem; }
 
+/* --- attempt page live view --- */
+
+.attempt-status {
+  font-family: var(--sans); font-size: .9rem; margin: .4rem 0 1rem;
+  padding: .5rem .8rem; border-left: 3px solid var(--rule); background: var(--surface);
+}
+.attempt-status.status-running { border-left-color: var(--accent); font-style: italic; }
+.attempt-status.status-failed { border-left-color: var(--bad); }
+.attempt-status.status-committed { border-left-color: var(--bronze); }
+pre.reply {
+  white-space: pre-wrap; word-break: break-word; font-size: .78rem;
+  max-height: 26rem; overflow-y: auto; background: var(--surface);
+  border: 1px solid var(--rule); padding: .5rem; margin: .4rem 0;
+}
+.livelink { margin: .5rem 0 0; }
+
 /* --- directive editing --- */
 
 textarea {

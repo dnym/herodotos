@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/dnym/herodotos/internal/domain"
 )
@@ -283,13 +285,14 @@ type ModelCallRow struct {
 	OutTokens  int
 	DurationMS int
 	Error      string
+	Response   string // raw reply text, for live inspection
 }
 
 // ListModelCalls returns the inference calls of one attempt.
 func (d *DB) ListModelCalls(ctx context.Context, attemptID string) ([]ModelCallRow, error) {
 	rows, err := d.sqlDB.QueryContext(ctx,
 		`SELECT seq, role, model, prompt_sha256, COALESCE(input_tokens,0), COALESCE(output_tokens,0),
-		        COALESCE(duration_ms,0), COALESCE(error,'')
+		        COALESCE(duration_ms,0), COALESCE(error,''), COALESCE(response_json,'')
 		 FROM model_calls WHERE attempt_id = ? ORDER BY seq`, attemptID)
 	if err != nil {
 		return nil, err
@@ -299,12 +302,38 @@ func (d *DB) ListModelCalls(ctx context.Context, attemptID string) ([]ModelCallR
 	for rows.Next() {
 		var m ModelCallRow
 		if err := rows.Scan(&m.Seq, &m.Role, &m.Model, &m.PromptSHA,
-			&m.InTokens, &m.OutTokens, &m.DurationMS, &m.Error); err != nil {
+			&m.InTokens, &m.OutTokens, &m.DurationMS, &m.Error, &m.Response); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// GetAttempt loads one attempt's summary row.
+func (d *DB) GetAttempt(ctx context.Context, id domain.ID) (domain.Attempt, error) {
+	var a domain.Attempt
+	row := d.sqlDB.QueryRowContext(ctx,
+		`SELECT id, step, status, COALESCE(error,''), COALESCE(pause_reason,'') FROM attempts WHERE id = ?`, id)
+	if err := row.Scan(&a.ID, &a.Step, &a.Status, &a.Error, &a.PauseReason); err != nil {
+		return a, err
+	}
+	return a, nil
+}
+
+// RunningAttempt returns the attempt of a step in flight, if any. The
+// live viewer points the browser at it while a run is active.
+func (d *DB) RunningAttempt(ctx context.Context) (string, bool, error) {
+	var id string
+	err := d.sqlDB.QueryRowContext(ctx,
+		`SELECT id FROM attempts WHERE status = 'running' ORDER BY id DESC LIMIT 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, nil
 }
 
 // --- proposal denormalization helpers used by RecordProposal ---

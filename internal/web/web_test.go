@@ -191,7 +191,7 @@ func TestPagesRender(t *testing.T) {
 	get(t, ts, "/events", http.StatusOK)
 	get(t, ts, "/events?region=king-a", http.StatusOK)
 	get(t, ts, "/attempts", http.StatusOK)
-	get(t, ts, "/attempt?id=att-000001", http.StatusOK)
+	get(t, ts, "/attempt?id=att-000001", http.StatusNotFound) // no attempts yet
 	get(t, ts, "/run/panel", http.StatusOK)
 	get(t, ts, "/nope", http.StatusNotFound)
 	get(t, ts, "/static/style.css", http.StatusOK)
@@ -439,6 +439,66 @@ func TestEventDetailPage(t *testing.T) {
 	}
 	get(t, ts, "/event?id=evt-999999", http.StatusNotFound)
 	get(t, ts, "/event", http.StatusOK) // no id: redirects to the timeline
+}
+
+func TestLiveAttemptView(t *testing.T) {
+	s := newTestServer(t, true)
+	s.Engine.Client = &slowClient{inner: &inference.Scripted{Replies: quietStep()}, delay: 300 * time.Millisecond}
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	postForm(t, ts, "/step", url.Values{}, "").Body.Close()
+
+	// The panel exposes the in-flight attempt with a live-watching link.
+	deadline := time.Now().Add(5 * time.Second)
+	var attemptID string
+	for attemptID == "" && time.Now().Before(deadline) {
+		if id, running, err := s.DB.RunningAttempt(context.Background()); err == nil && running {
+			attemptID = id
+		} else {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if attemptID == "" {
+		t.Fatal("no running attempt appeared")
+	}
+	panel := get(t, ts, "/run/panel", http.StatusOK)
+	if !strings.Contains(panel, "watch this step live") || !strings.Contains(panel, "/attempt?id="+attemptID) {
+		t.Errorf("panel lacks live link: %s", panel)
+	}
+
+	// The attempt page announces itself live and polls itself.
+	body := get(t, ts, "/attempt?id="+attemptID, http.StatusOK)
+	if !strings.Contains(body, "in progress") || !strings.Contains(body, `hx-trigger="every 4s"`) {
+		t.Errorf("attempt page not live: %s", body)
+	}
+
+	// As model calls land they appear with their replies.
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		calls, err := s.DB.ListModelCalls(context.Background(), attemptID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no model call appeared")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	body = get(t, ts, "/attempt?id="+attemptID, http.StatusOK)
+	if !strings.Contains(body, "logographer:king-a") || !strings.Contains(body, "reply") {
+		t.Errorf("live calls/replies missing from page")
+	}
+
+	waitRunIdle(t, s)
+	body = get(t, ts, "/attempt?id="+attemptID, http.StatusOK)
+	if !strings.Contains(body, "committed") || strings.Contains(body, `hx-trigger="every 4s"`) {
+		t.Error("finished attempt still polling or not marked committed")
+	}
+	get(t, ts, "/attempt?id=att-999999", http.StatusNotFound)
 }
 
 func TestStepWithoutInference(t *testing.T) {

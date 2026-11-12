@@ -209,6 +209,7 @@ type panelData struct {
 	Active     bool
 	PauseReq   bool
 	StepsDone  int
+	RunningID  string // attempt id of the step in flight, for the live viewer
 	LastResult string
 	LastErr    string
 }
@@ -217,6 +218,9 @@ func (s *Server) panelData(ctx context.Context) panelData {
 	pd := panelData{HasEngine: s.Engine != nil}
 	if reason, paused, err := s.DB.WorldPause(ctx); err == nil && paused {
 		pd.WorldPause = reason
+	}
+	if id, running, err := s.DB.RunningAttempt(ctx); err == nil && running {
+		pd.RunningID = id
 	}
 	s.runMu.Lock()
 	if s.run != nil {
@@ -574,6 +578,11 @@ func (s *Server) pageAttempt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	attempt, err := s.DB.GetAttempt(ctx, domain.ID(id))
+	if err != nil {
+		http.Error(w, "no such attempt", http.StatusNotFound)
+		return
+	}
 	proposals, err := s.DB.ListProposals(ctx, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -584,11 +593,18 @@ func (s *Server) pageAttempt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Responses are audit artifacts, not world prose: fold them away, but
+	// keep them available — this page is also the live debugging view.
+	for i := range calls {
+		if len(calls[i].Response) > 6000 {
+			calls[i].Response = calls[i].Response[:6000] + "\n…[truncated for display]"
+		}
+	}
 	s.render(w, "attempt", "Attempt "+id, r, struct {
-		ID        string
+		Attempt   domain.Attempt
 		Proposals []store.ProposalRow
 		Calls     []store.ModelCallRow
-	}{id, proposals, calls})
+	}{attempt, proposals, calls})
 }
 
 // --- helpers ---
