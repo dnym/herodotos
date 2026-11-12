@@ -364,6 +364,18 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt string) (*agents.O
 			if err != nil {
 				return err
 			}
+			// Validate the merged event set here so id mistakes go back
+			// to the orchestrator as corrections, not as a dead attempt.
+			for i := range r.Events {
+				if err := s.pv.ValidateFinalEvent(&r.Events[i]); err != nil {
+					return err
+				}
+			}
+			for _, ds := range r.DirectiveStatus {
+				if s.snap.Directives[ds.ID] == nil {
+					return fmt.Errorf("unknown directive %q in directive_status", ds.ID)
+				}
+			}
 			reply = r
 			return nil
 		})

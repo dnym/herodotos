@@ -200,6 +200,34 @@ func TestOrchestratorPauseDoesNotRewriteHistory(t *testing.T) {
 	}
 }
 
+func TestOrchestratorIdMistakeCorrected(t *testing.T) {
+	db, ctx := setup(t)
+
+	bad := `{"notes":"oops","events":[{"origin":"king-a","type":"development","title":"Clash","prose":"At the ford.","changes":[],"affects_entities":["prin-b"],"delivery":{"prin-b":2}}]}`
+	good := `{"notes":"fixed","events":[{"origin":"king-a","type":"development","title":"Clash","prose":"At the ford.","changes":[],"affects_entities":["q-elinor"],"delivery":{"prin-b":2}}]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: bad},
+		{Role: "orchestrator", Text: good},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("step should recover via correction: %v", err)
+	}
+	calls := fake.Calls()
+	if len(calls) != 4 {
+		t.Fatalf("want 4 model calls, got %d", len(calls))
+	}
+	if !strings.Contains(calls[3].Prompt, `unknown entity "prin-b"`) {
+		t.Fatal("correction did not name the bad id")
+	}
+	events, _ := db.ListEvents(ctx, store.EventQuery{})
+	if len(events) != 1 {
+		t.Fatalf("want 1 committed event, got %d", len(events))
+	}
+}
+
 func TestTruncatedReplyCorrected(t *testing.T) {
 	db, ctx := setup(t)
 
