@@ -436,6 +436,11 @@ func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 			return fmt.Errorf("unknown cause %q", id)
 		}
 	}
+	// Once canonical history is visible, every orchestrator event must
+	// be placed on the causal graph: it follows from something shown.
+	if len(pv.Snap.RecentEvents) > 0 && len(ev.Causes) == 0 {
+		return fmt.Errorf("event %q cites no causes: name at least one visible canonical event id in \"causes\" that it follows from", ev.Title)
+	}
 	for region, step := range ev.Delivery {
 		if _, ok := pv.Snap.Regions[region]; !ok {
 			return fmt.Errorf("delivery to unknown region %q", region)

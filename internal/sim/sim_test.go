@@ -113,6 +113,50 @@ func TestFullStepCommitsOneSharedHistory(t *testing.T) {
 	}
 }
 
+func TestFinalEventRequiresCausesAfterFirstStep(t *testing.T) {
+	db, ctx := setup(t)
+	step1 := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchAccept},
+	}}
+	e := &Engine{DB: db, Client: step1, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	noCause := `{"notes":"linked","events":[{"origin":"prin-b","type":"development","title":"Mustering","prose":"Drums on the border.","changes":[]}]}`
+	withCause := `{"notes":"linked","events":[{"origin":"prin-b","type":"development","title":"Mustering","prose":"Drums on the border.","changes":[],"causes":["evt-000001"]}]}`
+	step2 := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: noCause},
+		{Role: "orchestrator", Text: withCause},
+	}}
+	e2 := &Engine{DB: db, Client: step2, ModelName: "fake"}
+	if _, err := e2.RunStep(ctx); err != nil {
+		t.Fatalf("empty causes should have been corrected, not fatal: %v", err)
+	}
+	calls := step2.Calls()
+	if len(calls) != 4 {
+		t.Fatalf("want 4 calls, got %d", len(calls))
+	}
+	if !strings.Contains(calls[3].Prompt, "cites no causes") {
+		t.Fatal("causality correction missing from prompt")
+	}
+	events, _ := db.ListEvents(ctx, store.EventQuery{})
+	if len(events) != 2 {
+		t.Fatalf("want 2 events, got %d", len(events))
+	}
+	linked, err := db.GetEvent(ctx, "evt-000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(linked.CauseIDs) != 1 || linked.CauseIDs[0] != "evt-000001" {
+		t.Fatalf("causes not committed: %v", linked.CauseIDs)
+	}
+}
+
 func TestRegionAuthorityCorrection(t *testing.T) {
 	db, ctx := setup(t)
 	bad := `{"prose":"overreach","events":[{"type":"development","title":"Alarm next door","prose":"p","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alarm":"high"}}]}]}`

@@ -32,10 +32,10 @@ Rules:
   may dictate another region's response. Ask for reactions sparingly and
   only when a real missing decision blocks the step.
 - Accept proposals that do not interact; do not rewrite what works.
-- Preserve causality: when an event follows from a canonical event you
-  were shown, carry the causal event ids in its "causes" list. A step
-  where every event has empty causes usually means you dropped links
-  the proposals already made.
+- Preserve causality: every final event must carry at least one "causes"
+  entry naming a canonical event it follows from (step 1 excepted).
+  Replies with empty causes are rejected. Do not narrate your own
+  bookkeeping (e.g. "directive review") as events; directive_status covers it.
 - Keep "directive_status" terse: directive id and status word only.
   Bookkeeping must never crowd out the events; a complete smaller reply
   always beats a rich truncated one.

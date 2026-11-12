@@ -212,6 +212,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			Type: ev.Type, Title: ev.Title, Prose: ev.Prose,
 			Changes:   ev.Changes,
 			EntityIDs: ev.AffectsEntities,
+			CauseIDs:  ev.Causes,
 		}
 		ce.RegionIDs = affectedRegions(snap, &ev)
 		idx := len(plan.Events)
