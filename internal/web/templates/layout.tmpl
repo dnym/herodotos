@@ -1,0 +1,28 @@
+{{define "header"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} — herodotos</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <span class="brand"><a href="/">herodotos</a></span>
+  <nav>
+    <a href="/">overview</a>
+    <a href="/events">timeline</a>
+    <a href="/attempts">attempts</a>
+  </nav>
+</header>
+<main>
+{{if .Flash}}<p class="flash {{if .FlashErr}}err{{end}}">{{.Flash}}</p>{{end}}
+{{end}}
+
+{{define "footer"}}
+</main>
+<footer>canonical state and committed events are authoritative; prose and
+memory only describe them</footer>
+</body>
+</html>
+{{end}}

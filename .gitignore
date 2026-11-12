@@ -9,3 +9,7 @@ AGENTS.md
 .env
 /herodotos
 /build/
+*.db
+*.db-wal
+*.db-shm
+*.db.lock

@@ -1,0 +1,87 @@
+{{template "header" .}}
+
+{{$d := .Inner}}
+<section class="meta">
+  <h1>{{$d.Snap.Meta.WorldName}}</h1>
+  <p>{{$d.Date}} &middot; {{$d.Snap.Meta.StepDays}}-day steps &middot;
+     {{$d.Snap.Meta.Revision}} committed revision(s)</p>
+  {{if $d.HasStep}}
+  <form method="post" action="/step" class="stepform">
+    <button type="submit">advance one step</button>
+    <span class="hint">one bounded attempt; failures leave history untouched</span>
+  </form>
+  {{else}}
+  <p class="hint">no inference configured — start <code>serve</code> with
+  <code>HERODOTOS_INFERENCE_BASE_URL</code>/<code>HERODOTOS_INFERENCE_MODEL</code>
+  (or <code>--scripted</code>) to advance the world from here</p>
+  {{end}}
+  {{if $d.Pending}}<p class="hint">{{$d.Pending}} report(s) still in transit</p>{{end}}
+</section>
+
+<section>
+  <h2>Regions</h2>
+  <table>
+    <tr><th>id</th><th>name</th><th>status</th><th>canonical conditions</th><th>memory</th></tr>
+    {{range $id, $r := $d.Snap.Regions}}
+    <tr>
+      <td><code>{{$id}}</code></td>
+      <td>{{$r.Name}}</td>
+      <td class="status-{{$r.Status}}">{{$r.Status}}</td>
+      <td class="attrs">{{$r.Attrs}}</td>
+      <td>{{with index $d.Snap.Memories $id}}{{.Summary}}{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+
+{{if $d.Snap.Directives}}
+<section>
+  <h2>Directives</h2>
+  <table>
+    <tr><th>id</th><th>strength</th><th>status</th><th>text</th></tr>
+    {{range $id, $dir := $d.Snap.Directives}}
+    <tr>
+      <td><code>{{$id}}</code></td>
+      <td>{{if $dir.Hard}}hard{{else}}soft{{end}}</td>
+      <td>{{$dir.Status}}</td>
+      <td>{{$dir.Text}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+{{end}}
+
+<section>
+  <h2>Entities</h2>
+  <table>
+    <tr><th>id</th><th>kind</th><th>name</th><th>region</th><th>status</th></tr>
+    {{range $id, $e := $d.Snap.Entities}}
+    <tr>
+      <td><code>{{$id}}</code></td>
+      <td>{{$e.Kind}}</td>
+      <td>{{$e.Name}}</td>
+      <td><code>{{$e.RegionID}}</code></td>
+      <td class="status-{{$e.Status}}">{{$e.Status}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+
+<section>
+  <h2>Latest committed events</h2>
+  {{if not $d.Snap.RecentEvents}}<p class="hint">Nothing has happened yet.</p>{{end}}
+  <ul class="events">
+    {{range $ev := $d.Snap.RecentEvents}}
+    <li>
+      <span class="step">step {{$ev.Step}}</span>
+      <span class="type">{{$ev.Type}}</span>
+      <strong>{{$ev.Title}}</strong>
+      <p>{{$ev.Prose}}</p>
+      <p class="ids">{{$ev.ID}}{{if $ev.CauseIDs}} &middot; causes: {{range $i, $c := $ev.CauseIDs}}{{if $i}}, {{end}}{{$c}}{{end}}{{end}}</p>
+    </li>
+    {{end}}
+  </ul>
+  <p><a href="/events">full timeline &rarr;</a></p>
+</section>
+
+{{template "footer" .}}

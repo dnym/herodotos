@@ -1,0 +1,113 @@
+{
+  "id": "four-regions",
+  "name": "The Four Regions",
+  "start_date": "1204-03-01",
+  "step_days": 30,
+  "regions": [
+    {
+      "id": "kingdom-a",
+      "name": "Kingdom of Aelmark",
+      "attrs": {
+        "government": "hereditary monarchy",
+        "grain": "surplus",
+        "unrest": "low",
+        "throne": "contested succession, King Edric is aging"
+      }
+    },
+    {
+      "id": "principality-b",
+      "name": "March of Brannholm",
+      "attrs": {
+        "government": "military marcher lordship",
+        "ambition": "expansionist",
+        "military": "seasoned border levies"
+      }
+    },
+    {
+      "id": "republic-c",
+      "name": "Cantonal League of Corvay",
+      "attrs": {
+        "government": "merchant council",
+        "naval": "dominant in the inland sea",
+        "finance": "lending to both land powers"
+      }
+    },
+    {
+      "id": "frontier-d",
+      "name": "Duskmoor Frontier",
+      "attrs": {
+        "government": "none, free settlements",
+        "population": "mixed refugees and herders",
+        "ore": "worked by migrant miners"
+      }
+    }
+  ],
+  "connections": [
+    { "a": "kingdom-a", "b": "principality-b", "travel_days": 4 },
+    { "a": "kingdom-a", "b": "republic-c", "travel_days": 7 },
+    { "a": "republic-c", "b": "frontier-d", "travel_days": 6 },
+    { "a": "principality-b", "b": "frontier-d", "travel_days": 10 }
+  ],
+  "entities": [
+    { "id": "edric-iv", "kind": "person", "name": "King Edric IV", "region_id": "kingdom-a",
+      "attrs": { "age": "old", "health": "failing" } },
+    { "id": "ael-vesthelm", "kind": "settlement", "name": "Ael Vesthelm", "region_id": "kingdom-a",
+      "attrs": { "role": "capital and granary" } },
+    { "id": "po-aelmark", "kind": "polity", "name": "Crown of Aelmark", "region_id": "kingdom-a" },
+    { "id": "hakon-march", "kind": "person", "name": "Margrave Hakon", "region_id": "principality-b",
+      "attrs": { "stance": "watches Aelmark's succession closely" } },
+    { "id": "po-brannholm", "kind": "polity", "name": "March of Brannholm", "region_id": "principality-b" },
+    { "id": "corvay-council", "kind": "org", "name": "Council of Twelve Cantons", "region_id": "republic-c",
+      "attrs": { "voting": "weighted by grain contribution" } },
+    { "id": "po-corvay", "kind": "polity", "name": "Cantonal League", "region_id": "republic-c" },
+    { "id": "duskmoor-moots", "kind": "group", "name": "The Duskmoor moots", "region_id": "frontier-d",
+      "attrs": { "unity": "loose, gathers only against outsiders" } }
+  ],
+  "relationships": [
+    { "id": "rel-edric-crown", "source": "edric-iv", "target": "po-aelmark", "kind": "ruler_of" },
+    { "id": "rel-hakon-march", "source": "hakon-march", "target": "po-brannholm", "kind": "ruler_of" },
+    { "id": "rel-council-league", "source": "corvay-council", "target": "po-corvay", "kind": "governs" },
+    { "id": "rel-trade-a-c", "source": "po-aelmark", "target": "po-corvay", "kind": "trade_treaty",
+      "attrs": { "terms": "grain for silver, renewal due" } },
+    { "id": "rel-b-claims-a", "source": "po-brannholm", "target": "po-aelmark", "kind": "old_rivalry" }
+  ],
+  "directives": [
+    { "text": "The succession in Aelmark must become the central question within the first year.", "hard": false }
+  ],
+  "reference_docs": [
+    {
+      "id": "ref-world-rules",
+      "scope": "world",
+      "binding": true,
+      "title": "Binding world rules",
+      "body": "No gunpowder, no printing press, no epidemic spreads faster than people and goods travel. Distances measured in the connections list bound how fast news, armies, and ideas move. A region's inhabitants act on what they could plausibly know, never on facts still in transit.",
+      "keywords": "technology travel knowledge"
+    },
+    {
+      "id": "ref-a-chronicle",
+      "scope": "region",
+      "region_id": "kingdom-a",
+      "title": "Aelmark chronicle",
+      "body": "Aelmark's crown passes by senior male line, but the succession has twice been settled by acclamation in the granary square when the line was unclear. The great famine of the previous century is remembered as the price of grain hoarding.",
+      "keywords": "succession grain memory"
+    }
+  ],
+  "memories": {
+    "kingdom-a": {
+      "summary": "An old king, a full granary, and court factions already circling.",
+      "open_threads": ["the succession is unsettled", "the Corvay trade treaty is due for renewal"]
+    },
+    "principality-b": {
+      "summary": "A march forged against steppe raiders now eyeing rich, unsettled neighbours.",
+      "open_threads": ["Hakon weighs Aelmark's weakness against the cost of war"]
+    },
+    "republic-c": {
+      "summary": "The League sells to everyone and trusts no one; its fleets keep the inland sea cheap.",
+      "open_threads": ["lending terms to both land powers need renegotiating"]
+    },
+    "frontier-d": {
+      "summary": "No lord, no laws the moots recognize beyond the next valley.",
+      "open_threads": ["miners from Corvay push further into the moor each season"]
+    }
+  }
+}

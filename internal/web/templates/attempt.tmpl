@@ -1,0 +1,44 @@
+{{template "header" .}}
+
+{{$d := .Inner}}
+<h1>Attempt <code>{{$d.ID}}</code></h1>
+<p><a href="/attempts">&larr; all attempts</a></p>
+
+<section>
+  <h2>Proposals (agent output; never canonical on their own)</h2>
+  {{if not $d.Proposals}}<p class="hint">None recorded.</p>{{end}}
+  {{range $p := $d.Proposals}}
+  <article class="proposal">
+    <p><strong>{{$p.Author}}</strong> <span class="type">{{$p.Kind}}</span> <code>{{$p.ID}}</code></p>
+    <blockquote>{{$p.Prose}}</blockquote>
+    <details><summary>structured changes</summary>
+      <pre>changes:        {{$p.Changes}}
+affects_regions: {{$p.AffectsRegions}}
+affects_entities:{{$p.AffectsEntities}}
+causes:          {{$p.Causes}}
+delivery:        {{$p.Delivery}}</pre>
+    </details>
+  </article>
+  {{end}}
+</section>
+
+<section>
+  <h2>Model calls</h2>
+  {{if not $d.Calls}}<p class="hint">None recorded.</p>{{end}}
+  <table>
+    <tr><th>#</th><th>role</th><th>model</th><th>in</th><th>out</th><th>ms</th><th>error</th></tr>
+    {{range $c := $d.Calls}}
+    <tr>
+      <td>{{$c.Seq}}</td>
+      <td><code>{{$c.Role}}</code></td>
+      <td>{{$c.Model}}</td>
+      <td>{{$c.InTokens}}</td>
+      <td>{{$c.OutTokens}}</td>
+      <td>{{$c.DurationMS}}</td>
+      <td class="err">{{if $c.Error}}{{$c.Error}}{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+
+{{template "footer" .}}

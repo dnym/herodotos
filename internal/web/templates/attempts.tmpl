@@ -1,0 +1,21 @@
+{{template "header" .}}
+
+{{$d := .Inner}}
+<h1>Step attempts</h1>
+<p class="hint">Every step is one attempt. Failed attempts keep all their
+diagnostics but produced no canonical change.</p>
+
+{{if not $d.Attempts}}<p class="hint">No attempts yet.</p>{{end}}
+<table>
+  <tr><th>attempt</th><th>step</th><th>status</th><th>outcome</th></tr>
+  {{range $a := $d.Attempts}}
+  <tr>
+    <td><a href="/attempt?id={{$a.ID}}"><code>{{$a.ID}}</code></a></td>
+    <td>{{$a.Step}}</td>
+    <td class="status-{{$a.Status}}">{{$a.Status}}</td>
+    <td>{{$a.Error}}</td>
+  </tr>
+  {{end}}
+</table>
+
+{{template "footer" .}}

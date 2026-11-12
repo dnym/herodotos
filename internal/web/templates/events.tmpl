@@ -1,0 +1,36 @@
+{{template "header" .}}
+
+{{$d := .Inner}}
+<h1>Committed timeline</h1>
+
+<form method="get" action="/events" class="filter">
+  <label>region filter:
+    <input type="text" name="region" value="{{$d.Region}}" placeholder="all regions">
+  </label>
+  <button type="submit">apply</button>
+</form>
+
+{{if not $d.Events}}<p class="hint">No committed events{{if $d.Region}} for region {{$d.Region}}{{end}}.</p>{{end}}
+<ul class="events">
+  {{range $row := $d.Events}}
+  <li>
+    <span class="step">step {{$row.Event.Step}}</span>
+    <span class="type">{{$row.Event.Type}}</span>
+    <strong>{{$row.Event.Title}}</strong>
+    <p>{{$row.Event.Prose}}</p>
+    <p class="ids">
+      <code>{{$row.Event.ID}}</code>
+      {{if $row.Regions}} &middot; regions: {{$row.Regions}}{{end}}
+      {{if $row.Entities}} &middot; entities: {{$row.Entities}}{{end}}
+      {{if $row.Causes}} &middot; causes: {{$row.Causes}}{{end}}
+    </p>
+  </li>
+  {{end}}
+</ul>
+
+<p class="paging">
+  {{if ge $d.Offset $d.Limit}}<a href="/events?limit={{$d.Limit}}&offset={{sub $d.Offset $d.Limit}}{{with $d.Region}}&region={{.}}{{end}}">&larr; newer</a>{{end}}
+  {{if $d.More}}<a href="/events?limit={{$d.Limit}}&offset={{add $d.Offset $d.Limit}}{{with $d.Region}}&region={{.}}{{end}}">older &rarr;</a>{{end}}
+</p>
+
+{{template "footer" .}}
