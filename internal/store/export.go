@@ -1,0 +1,100 @@
+package store
+
+import (
+	"context"
+	"sort"
+
+	"github.com/dnym/herodotos/internal/domain"
+)
+
+// ExportBundle is the complete canonical world as one JSON document.
+// It deliberately excludes attempt diagnostics: those are engineering
+// traces, not world content.
+type ExportBundle struct {
+	GenTool       string                `json:"gen_tool"`
+	Regions       []domain.Region       `json:"regions"`
+	Connections   []domain.Connection   `json:"connections"`
+	Entities      []domain.Entity       `json:"entities"`
+	Relationships []domain.Relationship `json:"relationships"`
+	Directives    []domain.Directive    `json:"directives"`
+	References    []domain.ReferenceDoc `json:"references"`
+	Events        []domain.Event        `json:"events"`
+	Reports       []domain.Report       `json:"reports"`
+	Beliefs       []domain.Belief       `json:"beliefs"`
+	Memories      []domain.Memory       `json:"memories"`
+	Meta          domain.Meta           `json:"meta"`
+}
+
+// ExportBundle reads the entire committed world in chronological order.
+func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
+	snap, err := d.LoadSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	b := &ExportBundle{GenTool: "herodotos", Meta: snap.Meta}
+
+	for _, id := range sortedDomainKeys(snap.Regions) {
+		b.Regions = append(b.Regions, *snap.Regions[id])
+	}
+	b.Connections = snap.Connections
+	for _, id := range sortedDomainKeys(snap.Entities) {
+		b.Entities = append(b.Entities, *snap.Entities[id])
+	}
+	for _, id := range sortedDomainKeys(snap.Relationships) {
+		b.Relationships = append(b.Relationships, *snap.Relationships[id])
+	}
+	for _, id := range sortedDomainKeys(snap.Directives) {
+		b.Directives = append(b.Directives, *snap.Directives[id])
+	}
+	b.References = append(b.References, snap.WorldRefs...)
+	for _, id := range sortedDomainKeys(snap.RegionRefs) {
+		b.References = append(b.References, snap.RegionRefs[id]...)
+	}
+
+	events, err := d.ListEvents(ctx, EventQuery{Limit: 1 << 30})
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].Step != events[j].Step {
+			return events[i].Step < events[j].Step
+		}
+		return events[i].ID < events[j].ID
+	})
+	b.Events = events
+
+	rows, err := d.sqlDB.QueryContext(ctx,
+		`SELECT id, event_id, target_region_id, earliest_step, COALESCE(delivered_step, 0)
+		 FROM reports ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rp domain.Report
+		if err := rows.Scan(&rp.ID, &rp.EventID, &rp.TargetRegionID, &rp.EarliestStep, &rp.DeliveredStep); err != nil {
+			return nil, err
+		}
+		b.Reports = append(b.Reports, rp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for _, regionID := range sortedDomainKeys(snap.Beliefs) {
+		b.Beliefs = append(b.Beliefs, snap.Beliefs[regionID]...)
+	}
+	for _, id := range sortedDomainKeys(snap.Memories) {
+		b.Memories = append(b.Memories, *snap.Memories[id])
+	}
+	return b, nil
+}
+
+func sortedDomainKeys[V any](m map[domain.ID]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}

@@ -119,6 +119,43 @@ func (d *DB) ListDirectives(ctx context.Context) ([]domain.Directive, error) {
 	return out, rows.Err()
 }
 
+// UpdateDirectiveText rewrites a directive's wording. Directive text
+// belongs to the creative director, never to agents; this is the human
+// path. Returns false when the id does not exist.
+func (d *DB) UpdateDirectiveText(ctx context.Context, id domain.ID, text string) (bool, error) {
+	res, err := d.sqlDB.ExecContext(ctx, `UPDATE directives SET text = ? WHERE id = ?`, text, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// CreateDirective adds a new active directive and returns its id.
+func (d *DB) CreateDirective(ctx context.Context, text string, hard bool) (string, error) {
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	id, err := nextIDTx(ctx, tx, "dir")
+	if err != nil {
+		return "", err
+	}
+	h := 0
+	if hard {
+		h = 1
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO directives(id, text, hard, status) VALUES (?, ?, ?, 'active')`, id, text, h); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // ReportRow pairs a report with its event title for inspection.
 type ReportRow struct {
 	Report     domain.Report
@@ -201,16 +238,16 @@ func (d *DB) ListAttempts(ctx context.Context, limit int) ([]domain.Attempt, err
 // ProposalRow holds a proposal with its structured fields as raw JSON for
 // faithful inspection.
 type ProposalRow struct {
-	ID               string
-	AttemptID        string
-	Author           string
-	Kind             string
-	Prose            string
-	Changes          string
-	AffectsRegions   string
-	AffectsEntities  string
-	Causes           string
-	Delivery         string
+	ID              string
+	AttemptID       string
+	Author          string
+	Kind            string
+	Prose           string
+	Changes         string
+	AffectsRegions  string
+	AffectsEntities string
+	Causes          string
+	Delivery        string
 }
 
 // ListProposals returns the proposals recorded for one attempt.
@@ -238,14 +275,14 @@ func (d *DB) ListProposals(ctx context.Context, attemptID string) ([]ProposalRow
 
 // ModelCallRow describes one recorded inference call.
 type ModelCallRow struct {
-	Seq           int64
-	Role          string
-	Model         string
-	PromptSHA     string
-	InTokens      int
-	OutTokens     int
-	DurationMS    int
-	Error         string
+	Seq        int64
+	Role       string
+	Model      string
+	PromptSHA  string
+	InTokens   int
+	OutTokens  int
+	DurationMS int
+	Error      string
 }
 
 // ListModelCalls returns the inference calls of one attempt.

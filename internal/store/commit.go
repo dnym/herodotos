@@ -39,7 +39,12 @@ type CommitPlan struct {
 	Events       []CommittedEvent
 	Reports      []ReportPlan
 	Memories     []domain.Memory
+	Beliefs      []domain.Belief // RegionID, Modality, Statement, SubjectID; the store assigns id and as_of_step
 }
+
+// maxBeliefsPerRegion keeps one region's recorded beliefs bounded: beliefs
+// inform prompts, so recency matters more than accumulation.
+const maxBeliefsPerRegion = 12
 
 // CommitStep commits one step against the given base revision. If the
 // world moved since the snapshot, nothing is written and
@@ -112,6 +117,35 @@ func (d *DB) CommitStep(ctx context.Context, plan CommitPlan) ([]string, error) 
 			 ON CONFLICT(region_id) DO UPDATE SET summary=excluded.summary, open_threads=excluded.open_threads, updated_step=excluded.updated_step`,
 			mem.RegionID, mem.Summary, jsonStrings(mem.OpenThreads), mem.UpdatedStep); err != nil {
 			return nil, fmt.Errorf("memory %s: %w", mem.RegionID, err)
+		}
+	}
+
+	if len(plan.Beliefs) > 0 {
+		regions := map[domain.ID]bool{}
+		for _, bl := range plan.Beliefs {
+			bid, err := nextIDTx(ctx, tx, "bel")
+			if err != nil {
+				return nil, err
+			}
+			var subject any
+			if bl.SubjectID != "" {
+				subject = bl.SubjectID
+			}
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO beliefs(id, region_id, subject_id, modality, statement, as_of_step)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				bid, bl.RegionID, subject, bl.Modality, bl.Statement, step); err != nil {
+				return nil, fmt.Errorf("belief: %w", err)
+			}
+			regions[bl.RegionID] = true
+		}
+		for region := range regions {
+			if _, err := tx.ExecContext(ctx,
+				`DELETE FROM beliefs WHERE region_id = ? AND id NOT IN
+				 (SELECT id FROM beliefs WHERE region_id = ? ORDER BY id DESC LIMIT ?)`,
+				region, region, maxBeliefsPerRegion); err != nil {
+				return nil, fmt.Errorf("prune beliefs %s: %w", region, err)
+			}
 		}
 	}
 

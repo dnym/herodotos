@@ -14,11 +14,11 @@ import (
 // details stay absent; only validated proposals may invent consequential
 // facts later.
 type WorldSpec struct {
-	ID            string `json:"id,omitempty"`
-	Name          string `json:"name"`
-	StartDate     string `json:"start_date"`
-	StepDays      int    `json:"step_days"`
-	Regions       []struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name"`
+	StartDate string `json:"start_date"`
+	StepDays  int    `json:"step_days"`
+	Regions   []struct {
 		ID    domain.ID      `json:"id"`
 		Name  string         `json:"name"`
 		Attrs map[string]any `json:"attrs,omitempty"`
@@ -36,11 +36,11 @@ type WorldSpec struct {
 		Attrs    map[string]any `json:"attrs,omitempty"`
 	} `json:"entities,omitempty"`
 	Relationships []struct {
-		ID       domain.ID      `json:"id"`
-		Source   domain.ID      `json:"source"`
-		Target   domain.ID      `json:"target"`
-		Kind     string         `json:"kind"`
-		Attrs    map[string]any `json:"attrs,omitempty"`
+		ID     domain.ID      `json:"id"`
+		Source domain.ID      `json:"source"`
+		Target domain.ID      `json:"target"`
+		Kind   string         `json:"kind"`
+		Attrs  map[string]any `json:"attrs,omitempty"`
 	} `json:"relationships,omitempty"`
 	Directives []struct {
 		ID   domain.ID `json:"id,omitempty"`

@@ -21,17 +21,17 @@ func ValidID(s string) bool { return idPattern.MatchString(s) }
 // Meta holds world-level metadata and the simulated clock. Simulated time
 // never derives from the host clock.
 type Meta struct {
-	WorldID   string
-	WorldName string
+	WorldID   string `json:"world_id"`
+	WorldName string `json:"world_name"`
 	// StartDate is the day the simulation clock begins (YYYY-MM-DD).
-	StartDate string
+	StartDate string `json:"start_date"`
 	// StepDays is the fixed duration of one time step in days.
-	StepDays int
+	StepDays int `json:"step_days"`
 	// ClockStep is the number of committed steps; 0 means the start state.
-	ClockStep int
+	ClockStep int `json:"clock_step"`
 	// Revision increments once per committed step and guards concurrent
 	// writers during commitment.
-	Revision int64
+	Revision int64 `json:"revision"`
 }
 
 // StepDate returns the display date at the given step boundary.
@@ -46,49 +46,49 @@ func (m Meta) StepDate(step int) (time.Time, error) {
 // Region is a geographical area with a stable identity independent of the
 // agent currently managing it.
 type Region struct {
-	ID     ID
-	Name   string
-	Status string // active, dormant
-	Attrs  map[string]any
+	ID     ID             `json:"id"`
+	Name   string         `json:"name"`
+	Status string         `json:"status"` // active, dormant
+	Attrs  map[string]any `json:"attrs"`
 }
 
 // Connection is a travel link between two regions. TravelDays is the
 // baseline delay for information to cross it.
 type Connection struct {
-	A         ID
-	B         ID
-	TravelDay int
+	A         ID  `json:"a"`
+	B         ID  `json:"b"`
+	TravelDay int `json:"travel_days"`
 }
 
 // Entity is a historically relevant person, group, organization,
 // settlement, or polity.
 type Entity struct {
-	ID       ID
-	Kind     string // person, group, org, settlement, polity
-	Name     string
-	RegionID ID // empty when no fixed location
-	Status   string
-	Attrs    map[string]any
+	ID       ID             `json:"id"`
+	Kind     string         `json:"kind"` // person, group, org, settlement, polity
+	Name     string         `json:"name"`
+	RegionID ID             `json:"region_id"` // empty when no fixed location
+	Status   string         `json:"status"`
+	Attrs    map[string]any `json:"attrs"`
 }
 
 // Relationship links two entities (allegiance, family, hostility, trade...).
 type Relationship struct {
-	ID       ID
-	SourceID ID
-	TargetID ID
-	Kind     string
-	Status   string // active, ended
-	Attrs    map[string]any
+	ID       ID             `json:"id"`
+	SourceID ID             `json:"source_id"`
+	TargetID ID             `json:"target_id"`
+	Kind     string         `json:"kind"`
+	Status   string         `json:"status"` // active, ended
+	Attrs    map[string]any `json:"attrs"`
 }
 
 // Directive is a human creative instruction. Free-text directives default
 // to soft; hard directives are binding unless impossible.
 type Directive struct {
-	ID     ID
-	Text   string
-	Hard   bool
-	Status string // pending, active, fulfilled, conflicting
-	Notes  string
+	ID     ID     `json:"id"`
+	Text   string `json:"text"`
+	Hard   bool   `json:"hard"`
+	Status string `json:"status"` // pending, active, fulfilled, conflicting
+	Notes  string `json:"notes"`
 }
 
 // Change describes a proposed or committed modification of one world
@@ -125,55 +125,55 @@ type Proposal struct {
 
 // Event is a committed canonical happening.
 type Event struct {
-	ID        ID
-	Step      int
-	Type      string
-	Title     string
-	Prose     string
-	RegionIDs []ID
-	EntityIDs []ID
-	CauseIDs  []ID
+	ID        ID     `json:"id"`
+	Step      int    `json:"step"`
+	Type      string `json:"type"`
+	Title     string `json:"title"`
+	Prose     string `json:"prose"`
+	RegionIDs []ID   `json:"region_ids"`
+	EntityIDs []ID   `json:"entity_ids"`
+	CauseIDs  []ID   `json:"cause_ids"`
 }
 
 // Report carries an event's news to a region at a plausible earliest step.
 type Report struct {
-	ID             ID
-	EventID        ID
-	TargetRegionID ID
-	EarliestStep   int
-	DeliveredStep  int // 0 when not delivered yet
+	ID             ID  `json:"id"`
+	EventID        ID  `json:"event_id"`
+	TargetRegionID ID  `json:"target_region_id"`
+	EarliestStep   int `json:"earliest_step"`
+	DeliveredStep  int `json:"delivered_step"` // 0 when not delivered yet
 }
 
 // Belief is an in-world belief held by a region's relevant inhabitants or
 // a specific subject; it is distinct from canonical truth and from the
 // information given to an agent.
 type Belief struct {
-	ID         ID
-	RegionID   ID
-	SubjectID  ID // empty for the region's general belief
-	Modality   string
-	Statement  string
-	AsOfStep   int
+	ID        ID     `json:"id"`
+	RegionID  ID     `json:"region_id"`
+	SubjectID ID     `json:"subject_id"` // empty for the region's general belief
+	Modality  string `json:"modality"`
+	Statement string `json:"statement"`
+	AsOfStep  int    `json:"as_of_step"`
 }
 
 // Memory is a compact persistent summary for one region's agent.
 type Memory struct {
-	RegionID    ID
-	Summary     string
-	OpenThreads []string
-	UpdatedStep int
+	RegionID    ID       `json:"region_id"`
+	Summary     string   `json:"summary"`
+	OpenThreads []string `json:"open_threads"`
+	UpdatedStep int      `json:"updated_step"`
 }
 
 // ReferenceDoc is a scoped reference document; binding documents state
 // world rules, others are descriptive background.
 type ReferenceDoc struct {
-	ID       ID
-	Scope    string // world, region
-	RegionID ID
-	Binding  bool
-	Title    string
-	Body     string
-	Keywords string
+	ID       ID     `json:"id"`
+	Scope    string `json:"scope"` // world, region
+	RegionID ID     `json:"region_id"`
+	Binding  bool   `json:"binding"`
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	Keywords string `json:"keywords"`
 }
 
 // Attempt groups all diagnostics of one step execution.
