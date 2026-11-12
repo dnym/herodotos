@@ -356,6 +356,24 @@ func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Sna
 			fmt.Fprintf(&b, "- %s <-> %s (%d days)\n", c.A, c.B, c.TravelDay)
 		}
 	})
+	writeSection(&b, "ENTITIES (canonical; proposals may contradict them — you adjudicate)", func() {
+		ids := make([]string, 0, len(snap.Entities))
+		for id := range snap.Entities {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			e := snap.Entities[domain.ID(id)]
+			fmt.Fprintf(&b, "- %s %q kind=%s region=%s status=%s %s\n",
+				id, e.Name, e.Kind, e.RegionID, e.Status, jsonCompact(e.Attrs))
+		}
+	})
+	writeSection(&b, "RELATIONSHIPS (canonical)", func() {
+		for _, r := range snap.Relationships {
+			fmt.Fprintf(&b, "- %s %s -> %s kind=%s status=%s %s\n",
+				r.ID, r.SourceID, r.TargetID, r.Kind, r.Status, jsonCompact(r.Attrs))
+		}
+	})
 	writeSection(&b, "DIRECTIVES", func() {
 		for _, d := range snap.Directives {
 			kind := "soft"

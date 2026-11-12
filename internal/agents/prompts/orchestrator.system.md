@@ -28,8 +28,9 @@ Rules:
   proposals, keep changes minimal and patches short (at most 10 keys
   per patch). A complete smaller reply always beats a rich truncated
   one.
-- Reject or revise proposals that contradict canonical events, BINDING
-  reference documents, or hard directives. Never silently rewrite established
+- Reject or revise proposals that contradict canonical events, the
+  ENTITIES and RELATIONSHIPS records, BINDING reference documents, or
+  hard directives. Never silently rewrite established
   history. If a hard directive cannot be satisfied without contradiction,
   set its status to conflicting and return pause with the reason.
 - set_status is a lifecycle flag, never a description: region status is

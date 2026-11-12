@@ -241,3 +241,40 @@ func TestFuzzParseNeverPanics(t *testing.T) {
 		}()
 	}
 }
+
+func TestOrchestratorPromptCarriesCanonicalEntityState(t *testing.T) {
+	// The adjudicator must be able to inspect established entity and
+	// relationship records, not just what proposals choose to restate.
+	snap := &store.Snapshot{
+		Regions: map[domain.ID]*domain.Region{
+			"king-a": {ID: "king-a", Name: "King A", Status: "active"},
+			"prin-b": {ID: "prin-b", Name: "Prin B", Status: "active"},
+		},
+		Entities: map[domain.ID]*domain.Entity{
+			"q-elinor": {ID: "q-elinor", Kind: "person", Name: "Queen Elinor",
+				RegionID: "king-a", Status: "active",
+				Attrs: map[string]any{"health": "failing", "claims": 2}},
+		},
+		Relationships: map[domain.ID]*domain.Relationship{
+			"rel-a-c": {ID: "rel-a-c", SourceID: "king-a", TargetID: "prin-b",
+				Kind: "alliance", Status: "active"},
+		},
+	}
+	contradicting := map[string][]domain.PropEvent{
+		"logographer:king-a": {{Title: "The healthy queen rides", Prose: "p",
+			Changes: []domain.Change{{Object: "entity", ObjectID: "q-elinor", Op: "set_status", Patch: map[string]any{"status": "destroyed"}}}}},
+	}
+	p := RenderOrchestratorPrompt(domain.Meta{WorldName: "W"}, 3, snap, contradicting, nil, 0)
+	for _, want := range []string{
+		"ENTITIES", "q-elinor", "health", "failing",
+		"region=king-a", "status=active",
+		"RELATIONSHIPS", "rel-a-c", "alliance",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("orchestrator prompt missing %q", want)
+		}
+	}
+	if !strings.Contains(p, "canonical") {
+		t.Error("canonical records must be labeled as such, distinct from proposals")
+	}
+}
