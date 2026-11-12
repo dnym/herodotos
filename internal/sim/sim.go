@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -55,6 +56,10 @@ func (f *Failure) Error() string {
 // Unwrap exposes the underlying cause.
 func (f *Failure) Unwrap() error { return f.Err }
 
+// ErrPaused means the world is in the durable paused state: a human must
+// resolve the conflict (usually a hard directive) before steps continue.
+var ErrPaused = errors.New("world is paused")
+
 // RunStep advances the world by exactly one step. On any failure the
 // attempt keeps its diagnostics but the canonical state and clock are
 // untouched.
@@ -65,6 +70,14 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 	b := e.Budgets
 	if b.MaxModelCallsPerStep <= 0 {
 		b = config.DefaultBudgets()
+	}
+
+	// A durable pause blocks before any attempt opens: the halt is world
+	// state, not process state.
+	if reason, paused, err := e.DB.WorldPause(ctx); err != nil {
+		return nil, fmt.Errorf("meta: %w", err)
+	} else if paused {
+		return nil, fmt.Errorf("%w: %s (resolve the conflict, then resume)", ErrPaused, reason)
 	}
 
 	// Open the attempt first: BeginAttempt marks this boundary's report
@@ -98,6 +111,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 
 	proposals := map[string][]domain.PropEvent{}
 	memories := map[string]*agents.MemoryUpdate{}
+	beliefs := map[string][]agents.BeliefRecord{}
 	propSeq := 0
 	recordProposal := func(author, kind, proseText string, evs []domain.PropEvent) error {
 		propSeq++
@@ -130,6 +144,9 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		if reply.Memory != nil && reply.Memory.Summary != "" {
 			memories[regionID] = reply.Memory
 		}
+		if len(reply.Beliefs) > 0 {
+			beliefs[regionID] = append(beliefs[regionID], reply.Beliefs...)
+		}
 		kind := "development"
 		if len(reply.Events) == 0 {
 			kind = "none"
@@ -154,6 +171,12 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			}
 			if reply.Pause.DirectiveID != "" {
 				reason += fmt.Sprintf(" (directive %s)", reply.Pause.DirectiveID)
+			}
+			// The halt is durable world state: it must survive restarts
+			// and block later steps until a human resumes. The attempt
+			// still produces zero canonical changes.
+			if err := e.DB.PauseWorld(context.WithoutCancel(ctx), attemptID, reason); err != nil {
+				return fail("record pause", err)
 			}
 			return fail(reason, nil)
 		}
@@ -185,6 +208,9 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			}
 			if reply2.Memory != nil && reply2.Memory.Summary != "" {
 				memories[regionID] = reply2.Memory
+			}
+			if len(reply2.Beliefs) > 0 {
+				beliefs[regionID] = append(beliefs[regionID], reply2.Beliefs...)
 			}
 			kind := "reaction"
 			if len(reply2.Events) == 0 {
@@ -238,7 +264,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		}
 		plan.Events = append(plan.Events, store.CommittedEvent{
 			Type: "resolution", Title: "Directive review",
-			Prose: "The orchestrator reviewed standing directives.",
+			Prose:   "The orchestrator reviewed standing directives.",
 			Changes: changes,
 		})
 	}
@@ -247,6 +273,15 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		plan.Memories = append(plan.Memories, domain.Memory{
 			RegionID: regionID, Summary: m.Summary, OpenThreads: m.OpenThreads, UpdatedStep: newStep,
 		})
+	}
+
+	for regionID, bs := range beliefs {
+		for _, bl := range bs {
+			plan.Beliefs = append(plan.Beliefs, domain.Belief{
+				RegionID: regionID, SubjectID: bl.SubjectID,
+				Modality: bl.Modality, Statement: bl.Statement,
+			})
+		}
 	}
 
 	ids, err := e.DB.CommitStep(ctx, plan)
@@ -342,6 +377,11 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 			for i := range r.Events {
 				if err := s.pv.ValidateLogographerProposal(regionID, &r.Events[i]); err != nil {
 					return err
+				}
+			}
+			for _, bl := range r.Beliefs {
+				if bl.SubjectID != "" && s.snap.Entities[bl.SubjectID] == nil {
+					return fmt.Errorf("belief subject %q is not a known entity", bl.SubjectID)
 				}
 			}
 			reply = r

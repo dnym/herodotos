@@ -23,7 +23,12 @@ Reply with ONE JSON object and nothing else:
       "delivery": {"other-region-id": <earliest step the news can arrive>}
     }
   ],
-  "memory": {"summary": "<compact region memory>", "open_threads": ["ongoing intentions"]}
+  "memory": {"summary": "<compact region memory>", "open_threads": ["ongoing intentions"]},
+  "beliefs": [
+    {"subject_id": "<entity id from your context, or omit for a general belief>",
+     "modality": "known | uncertain | mistaken",
+     "statement": "<what people in your region believe; may be wrong>"}
+  ]
 }
 
 Hard rules:
@@ -47,5 +52,6 @@ Hard rules:
   impossible.
 - Beliefs record what inhabitants think; they may be wrong. Never treat
   them as fact, and never let inhabitants act on facts they could not
-  know.
+  know. Record beliefs only when they are new or changed — at most 4 per
+  reply; they persist in your region's records without being re-stated.
 - You may never change directives.

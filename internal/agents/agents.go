@@ -31,11 +31,20 @@ type MemoryUpdate struct {
 	OpenThreads []string `json:"open_threads,omitempty"`
 }
 
+// BeliefRecord is one in-world belief a logographer records for their
+// region. It describes what inhabitants think, not canonical truth.
+type BeliefRecord struct {
+	SubjectID string `json:"subject_id,omitempty"` // entity id, or empty for a general belief
+	Modality  string `json:"modality"`             // known, uncertain, mistaken
+	Statement string `json:"statement"`
+}
+
 // LogographerReply is a parsed regional agent reply.
 type LogographerReply struct {
-	Prose  string             `json:"prose"`
-	Events []domain.PropEvent `json:"events"`
-	Memory *MemoryUpdate      `json:"memory,omitempty"`
+	Prose   string             `json:"prose"`
+	Events  []domain.PropEvent `json:"events"`
+	Memory  *MemoryUpdate      `json:"memory,omitempty"`
+	Beliefs []BeliefRecord     `json:"beliefs,omitempty"`
 }
 
 // OrchestratorReply is a parsed adjudication reply.
@@ -98,7 +107,33 @@ func ParseLogographerReply(text string) (*LogographerReply, error) {
 			return nil, fmt.Errorf("event %d needs type, title, and prose", i)
 		}
 	}
+	if err := validateBeliefs(r.Beliefs); err != nil {
+		return nil, err
+	}
 	return &r, nil
+}
+
+// maxBeliefsPerAgent bounds how much in-world belief one reply may add.
+const maxBeliefsPerAgent = 4
+
+func validateBeliefs(bs []BeliefRecord) error {
+	if len(bs) > maxBeliefsPerAgent {
+		return fmt.Errorf("too many beliefs: %d (max %d)", len(bs), maxBeliefsPerAgent)
+	}
+	for i, bl := range bs {
+		switch bl.Modality {
+		case "known", "uncertain", "mistaken":
+		default:
+			return fmt.Errorf("belief %d: modality must be known, uncertain, or mistaken, got %q", i, bl.Modality)
+		}
+		if bl.Statement == "" || len(bl.Statement) > 400 {
+			return fmt.Errorf("belief %d: statement must be present and at most 400 characters", i)
+		}
+		if bl.SubjectID != "" && !domain.ValidID(bl.SubjectID) {
+			return fmt.Errorf("belief %d: invalid subject id %q", i, bl.SubjectID)
+		}
+	}
+	return nil
 }
 
 // ParseOrchestratorReply decodes an adjudication reply.

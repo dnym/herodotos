@@ -242,6 +242,21 @@ func TestOrchestratorPauseDoesNotRewriteHistory(t *testing.T) {
 	if meta.ClockStep != 0 {
 		t.Fatal("clock moved on pause")
 	}
+	// The pause is durable world state: it blocks later steps until a
+	// human resumes. The scripted client is exhausted, so if the engine
+	// tried to call the model the error would be about replies instead.
+	if reason, paused, err := db2.WorldPause(ctx); err != nil || !paused || !strings.Contains(reason, "dir-000001") {
+		t.Fatalf("world not paused durably: %q %v %v", reason, paused, err)
+	}
+	if _, err := e.RunStep(ctx); !errors.Is(err, ErrPaused) {
+		t.Fatalf("second step should be refused with ErrPaused, got %v", err)
+	}
+	if err := db2.ResumeWorld(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if reason, paused, _ := db2.WorldPause(ctx); paused {
+		t.Fatalf("still paused after resume: %q", reason)
+	}
 }
 
 func TestOrchestratorIdMistakeCorrected(t *testing.T) {
@@ -410,5 +425,50 @@ func TestVisibilitySeparation(t *testing.T) {
 	}
 	if len(view.Reports) != 1 || view.Reports[0].Title != "Rioting in the capital" {
 		t.Fatalf("report not delivered: %+v", view.Reports)
+	}
+}
+
+func TestBeliefsRecordedAndScopedToRegion(t *testing.T) {
+	db, ctx := setup(t)
+	king := `{"prose":"Rumors spread.","events":[],"beliefs":[{"subject_id":"q-elinor","modality":"mistaken","statement":"The queen has already fled the capital."},{"modality":"uncertain","statement":"Grain ships will arrive within the fortnight."}]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: king},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: `{"notes":"Quiet step.","events":[]}`},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := db.LoadSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Beliefs["king-a"]) != 2 || len(snap.Beliefs["prin-b"]) != 0 {
+		t.Fatalf("belief scoping wrong: %v", snap.Beliefs)
+	}
+	bl := snap.Beliefs["king-a"][0]
+	if bl.Modality != "mistaken" || bl.SubjectID != "q-elinor" || bl.AsOfStep != 1 {
+		t.Errorf("belief stored wrong: %+v", bl)
+	}
+}
+
+func TestBeliefBadInputFeedsCorrection(t *testing.T) {
+	db, ctx := setup(t)
+	bad := `{"prose":"x","events":[],"beliefs":[{"subject_id":"ghost-999","modality":"certain","statement":"nonsense"}]}`
+	good := `{"prose":"fixed","events":[],"beliefs":[{"modality":"uncertain","statement":"The harvest will be short."}]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: bad},
+		{Role: "logographer:king-a", Text: good}, // correction round
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: `{"notes":"Quiet step.","events":[]}`},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("corrected reply should commit: %v", err)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if len(snap.Beliefs["king-a"]) != 1 || snap.Beliefs["king-a"][0].SubjectID != "" {
+		t.Fatalf("only the corrected belief should exist: %+v", snap.Beliefs["king-a"])
 	}
 }
