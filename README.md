@@ -19,7 +19,9 @@ outcome to SQLite. Agents propose. Only the engine commits.
    and correction retries are bounded.
 4. The engine validates every change (identities, regional authority,
    delivery times), then commits events, state changes, delayed
-   reports, and memory updates in one short database transaction.
+   reports, recorded beliefs, and memory updates in one short database
+   transaction. Beliefs are in-world opinions that may be wrong; each
+   region's set is pruned to its twelve newest.
 
 Canonical state and committed events are authoritative; prose, memory,
 and beliefs only describe them. News reaches other regions only at
@@ -43,15 +45,25 @@ herodotos serve --db world.db       # web overview on http://127.0.0.1:8080
 # Or replay deterministic replies with no model server at all:
 herodotos step --db world.db --scripted testdata/model-responses/four-regions-step1.json
 herodotos inspect --db world.db
+herodotos resume --db world.db      # lift a durable world pause
 ```
 
-`serve` shows the world overview, timeline, and per-attempt diagnostics
-(proposals, model calls, tokens, errors), and can advance one step per
-request while inference is configured; the step button reports progress
-in-place via the vendored HTMX (a live step can run for minutes). The
-prose UI is set in vendored EB Garamond (SIL OFL 1.1). No external
-assets are fetched at runtime. Exactly one process may hold a world
-database at a time; others exit with a clear lock error.
+`serve` shows the world overview, timeline, per-attempt diagnostics
+(proposals, model calls, tokens, errors), and run control: start a run
+of one, N, or unlimited steps from the browser; steps execute in a
+server-managed background run, so closing the tab never terminates one.
+A run can be paused only at a step boundary, which keeps every step
+atomic. When the orchestrator halts the world on a contradiction, the
+pause is durable world state: it survives restarts, blocks further
+steps, and the overview explains it until you resolve the conflict and
+resume — from the browser or `herodotos resume`. Directive text can be
+edited and new directives added from the overview (the historians
+never change directives themselves), and `/export` downloads the
+entire canonical world as one JSON document. Mutation endpoints reject
+cross-origin requests. The prose UI is set in vendored EB Garamond
+(SIL OFL 1.1); no external assets are fetched at runtime. Exactly one
+process may hold a world database at a time; others exit with a clear
+lock error.
 
 ## Repository layout
 
