@@ -676,6 +676,45 @@ func TestUndeliveredEventIsNoCauseForOtherRegion(t *testing.T) {
 	}
 }
 
+func TestDirectiveReviewBookkeepingStaysOutOfHistory(t *testing.T) {
+	db, ctx := setup(t)
+	if _, err := db.CreateDirective(ctx, "The harbor must stay open.", false); err != nil {
+		t.Fatal(err)
+	}
+	// Re-listing an unchanged status is bookkeeping: no event, and the
+	// step commits with only the region's own event.
+	if _, err := (&Engine{DB: db, Client: &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: `{"notes":"Accepted.","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"],"delivery":{"prin-b":3}}],"directive_status":[{"id":"dir-000001","status":"active"}]}`},
+	}}}).RunStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := db.ListEvents(ctx, store.EventQuery{})
+	if len(events) != 1 {
+		t.Fatalf("unchanged directive listing created an event: %+v", events)
+	}
+	// A real transition still gets recorded.
+	if _, err := (&Engine{DB: db, Client: &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: `{"notes":"Directive fulfilled.","events":[],"directive_status":[{"id":"dir-000001","status":"fulfilled"}]}`},
+	}}}).RunStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = db.ListEvents(ctx, store.EventQuery{})
+	if len(events) != 2 {
+		t.Fatalf("directive transition not recorded: %+v", events)
+	}
+	if events[0].Title != "Directive review" {
+		t.Fatalf("expected the review event, got %+v", events[0])
+	}
+	dirs, _ := db.ListDirectives(ctx)
+	if len(dirs) != 1 || dirs[0].Status != "fulfilled" {
+		t.Fatalf("directive status not applied: %+v", dirs)
+	}
+}
+
 func TestConsultRoundGroundsProposal(t *testing.T) {
 	db, ctx := setup(t)
 	// One cataloged reference visible to king-a (keywords do not match

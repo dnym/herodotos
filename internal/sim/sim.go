@@ -291,16 +291,24 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			if snap.Directives[ds.ID] == nil {
 				return fail("final event rejected", fmt.Errorf("unknown directive %q", ds.ID))
 			}
+			// Re-listing a status that has not changed is pure
+			// bookkeeping: it must not enter the event stream, where it
+			// would crowd the narrative timeline and pose as a cause.
+			if snap.Directives[ds.ID].Status == ds.Status {
+				continue
+			}
 			changes = append(changes, domain.Change{
 				Object: "directive", ObjectID: ds.ID, Op: "set_status",
 				Patch: map[string]any{"status": ds.Status},
 			})
 		}
-		plan.Events = append(plan.Events, store.CommittedEvent{
-			Type: "resolution", Title: "Directive review",
-			Prose:   "The orchestrator reviewed standing directives.",
-			Changes: changes,
-		})
+		if len(changes) > 0 {
+			plan.Events = append(plan.Events, store.CommittedEvent{
+				Type: "resolution", Title: "Directive review",
+				Prose:   "The orchestrator reviewed standing directives.",
+				Changes: changes,
+			})
+		}
 	}
 
 	for regionID, m := range memories {

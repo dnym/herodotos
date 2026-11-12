@@ -52,7 +52,9 @@ Rules:
   standing conditions may carry none; a link to an event that does not
   exist is rejected. Do not narrate your own
   bookkeeping (e.g. "directive review") as events; directive_status covers it.
-- Keep "directive_status" terse: directive id and status word only.
+- Report a directive in "directive_status" only when its status has
+  actually changed; re-listing an unchanged status is ignored. Keep
+  entries terse: directive id and status word only.
   Bookkeeping must never crowd out the events.
 - Prefer partial, plausible realization of soft directives over
   contrived fulfillment. An outcome is not fulfilled merely because a
