@@ -51,13 +51,22 @@ type LogographerReply struct {
 	Consult []string `json:"consult,omitempty"`
 }
 
+// ReactionRequest is one request for a regional reaction. The premise
+// names the canonical events the question rests on, so the engine can
+// verify the responding region could actually know them: a reaction
+// must not become a side channel for not-yet-delivered news.
+type ReactionRequest struct {
+	Question string      `json:"question"`
+	Premise  []domain.ID `json:"premise"`
+}
+
 // OrchestratorReply is a parsed adjudication reply.
 type OrchestratorReply struct {
-	Notes           string             `json:"notes"`
-	Events          []domain.PropEvent `json:"events"`
-	DirectiveStatus []DirectiveStatus  `json:"directive_status,omitempty"`
-	Reactions       map[string]string  `json:"reactions,omitempty"`
-	Pause           *Pause             `json:"pause,omitempty"`
+	Notes           string                     `json:"notes"`
+	Events          []domain.PropEvent         `json:"events"`
+	DirectiveStatus []DirectiveStatus          `json:"directive_status,omitempty"`
+	Reactions       map[string]ReactionRequest `json:"reactions,omitempty"`
+	Pause           *Pause                     `json:"pause,omitempty"`
 }
 
 // DirectiveStatus updates one directive's status.
@@ -144,6 +153,9 @@ func validateBeliefs(bs []BeliefRecord) error {
 func ParseOrchestratorReply(text string) (*OrchestratorReply, error) {
 	var r OrchestratorReply
 	if err := decodeStrictJSON(text, &r); err != nil {
+		if strings.Contains(err.Error(), "reactions") {
+			return nil, fmt.Errorf("invalid reply: %w; reactions must be {\"region id\": {\"question\": \"...\", \"premise\": [\"evt-...\"]}} naming canonical events the region can already know", err)
+		}
 		return nil, fmt.Errorf("invalid reply: %w", err)
 	}
 	if len(r.Events) > 3*maxEventsPerAgent {
@@ -160,6 +172,16 @@ func ParseOrchestratorReply(text string) (*OrchestratorReply, error) {
 		case "pending", "active", "fulfilled", "conflicting":
 		default:
 			return nil, fmt.Errorf("directive %s: invalid status %q", ds.ID, ds.Status)
+		}
+	}
+	for region, rx := range r.Reactions {
+		if strings.TrimSpace(rx.Question) == "" {
+			return nil, fmt.Errorf("reaction for %s: question must not be empty", region)
+		}
+		for _, id := range rx.Premise {
+			if !domain.ValidID(id) {
+				return nil, fmt.Errorf("reaction for %s: invalid premise id %q", region, id)
+			}
 		}
 	}
 	return &r, nil
@@ -660,6 +682,48 @@ func knownCause(s *store.Snapshot, id domain.ID) bool {
 		}
 	}
 	return false
+}
+
+// CanObserveEvent reports whether a region could know a committed event
+// at the snapshot boundary: its own region's recent history (authorship
+// or direct involvement) or a report already delivered to it. Reaction
+// questions must rest only on such events, or the reaction round would
+// leak news before its delivery time.
+func (pv *ProposalValidator) CanObserveEvent(regionID domain.ID, eventID domain.ID) bool {
+	for _, ev := range pv.Snap.RecentEvents {
+		if ev.ID != eventID {
+			continue
+		}
+		for _, rid := range ev.RegionIDs {
+			if rid == regionID {
+				return true
+			}
+		}
+		for _, rep := range pv.Snap.DeliveredReports[regionID] {
+			if rep.EventID == eventID {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// ValidateReaction checks one reaction request: the region must exist
+// and every premise event must be observable by that region now.
+func (pv *ProposalValidator) ValidateReaction(regionID domain.ID, rx ReactionRequest) error {
+	if pv.Snap.Regions[regionID] == nil {
+		return fmt.Errorf("reaction target %q is not a region", regionID)
+	}
+	if len(rx.Premise) == 0 {
+		return fmt.Errorf("reaction for %q needs a premise: name at least one canonical event from that region's own history or delivered reports", regionID)
+	}
+	for _, id := range rx.Premise {
+		if !pv.CanObserveEvent(regionID, id) {
+			return fmt.Errorf("reaction for %q: premise event %q is not knowable by that region yet (recent own history or delivered reports only)", regionID, id)
+		}
+	}
+	return nil
 }
 
 // --- interaction detection ---

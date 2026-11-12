@@ -278,3 +278,58 @@ func TestOrchestratorPromptCarriesCanonicalEntityState(t *testing.T) {
 		t.Error("canonical records must be labeled as such, distinct from proposals")
 	}
 }
+
+func TestLegacyStringReactionRejected(t *testing.T) {
+	// The old free-form "reactions": {"region": "question"} form must
+	// fail with a parse error that teaches the structured envelope,
+	// not silently pass.
+	_, err := ParseOrchestratorReply(`{"notes":"n","events":[],"reactions":{"prin-b":"why?"}}`)
+	if err == nil {
+		t.Fatal("string reaction accepted")
+	}
+	if !strings.Contains(err.Error(), "question") || !strings.Contains(err.Error(), "premise") {
+		t.Errorf("parse error must teach the envelope: %v", err)
+	}
+	if _, err := ParseOrchestratorReply(`{"notes":"n","events":[],"reactions":{"prin-b":{"question":"why?","premise":["evt-000001"]}}}`); err != nil {
+		t.Errorf("valid structured reaction rejected: %v", err)
+	}
+	if _, err := ParseOrchestratorReply(`{"notes":"n","events":[],"reactions":{"prin-b":{"question":"","premise":["evt-000001"]}}}`); err == nil {
+		t.Error("empty question accepted")
+	}
+}
+
+func TestReactionPremiseVisibility(t *testing.T) {
+	snap := &store.Snapshot{
+		Regions: map[domain.ID]*domain.Region{"king-a": {ID: "king-a"}, "prin-b": {ID: "prin-b"}},
+		RecentEvents: []domain.Event{
+			{ID: "evt-000001", Step: 1, Title: "Clash", RegionIDs: []domain.ID{"king-a", "prin-b"}},
+			{ID: "evt-000002", Step: 1, Title: "Riot", RegionIDs: []domain.ID{"king-a"}},
+		},
+		DeliveredReports: map[domain.ID][]domain.Report{
+			"prin-b": {{EventID: "evt-000002", EarliestStep: 2, DeliveredStep: 2}},
+		},
+	}
+	pv := &ProposalValidator{Snap: snap, CurrentStep: 2}
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000001"}}); err != nil {
+		t.Errorf("involved event rejected: %v", err)
+	}
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000002"}}); err != nil {
+		t.Errorf("delivered report event rejected: %v", err)
+	}
+	if err := pv.ValidateReaction("king-a", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000002"}}); err != nil {
+		t.Errorf("own event rejected: %v", err)
+	}
+	bad := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-999999"}})
+	if bad == nil {
+		t.Fatal("unknown premise event accepted")
+	}
+	if !strings.Contains(bad.Error(), "not knowable") {
+		t.Errorf("error must teach visibility rules: %v", bad)
+	}
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q"}); err == nil {
+		t.Error("premise-less reaction accepted")
+	}
+	if err := pv.ValidateReaction("nowhere", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000001"}}); err == nil {
+		t.Error("unknown reaction target accepted")
+	}
+}

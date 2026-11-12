@@ -133,7 +133,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		if err != nil {
 			return fail("build view", err)
 		}
-		reply, err := st.askLogographer(ctx, regionID, view, "")
+		reply, err := st.askLogographer(ctx, regionID, view, "", nil)
 		if err != nil {
 			return fail(fmt.Sprintf("region %s proposal failed", regionID), err)
 		}
@@ -172,10 +172,11 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 	for round := 0; ; round++ {
 		interactions := agents.DetectInteractions(proposals)
 		prompt := agents.RenderOrchestratorPrompt(snap.Meta, currentStep, snap, proposals, interactions, b.MaxPromptBytes)
-		reply, err := st.askOrchestrator(ctx, prompt)
+		reply, err := st.askOrchestrator(ctx, prompt, round < b.MaxReactionRounds)
 		if err != nil {
 			return fail("orchestrator failed", err)
 		}
+
 		if reply.Pause != nil {
 			reason := reply.Pause.Reason
 			if reason == "" {
@@ -209,8 +210,17 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			if err != nil {
 				return fail("build reaction view", err)
 			}
-			question := reply.Reactions[regionID]
-			reply2, err := st.askLogographer(ctx, regionID, view, question)
+			question := reply.Reactions[regionID].Question
+			var premise []domain.Event
+			for _, id := range reply.Reactions[regionID].Premise {
+				for _, ev := range snap.RecentEvents {
+					if ev.ID == id {
+						premise = append(premise, ev)
+						break
+					}
+				}
+			}
+			reply2, err := st.askLogographer(ctx, regionID, view, question, premise)
 			if err != nil {
 				return fail(fmt.Sprintf("region %s reaction failed", regionID), err)
 			}
@@ -388,10 +398,17 @@ type stepRun struct {
 	used    int
 }
 
-func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *knowledge.LogographerView, extra string) (*agents.LogographerReply, error) {
+func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *knowledge.LogographerView, extra string, premise []domain.Event) (*agents.LogographerReply, error) {
 	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view, s.b.MaxPromptBytes)
 	if extra != "" {
-		prompt += "\nTHE ORCHESTRATOR ASKS YOU: " + extra + "\nAnswer with the same JSON format, reacting only within your authority.\n"
+		prompt += "\nTHE ORCHESTRATOR ASKS YOU: " + extra + "\n"
+		if len(premise) > 0 {
+			prompt += "The question rests on events you can see in your own history or delivered reports:\n"
+			for _, ev := range premise {
+				prompt += fmt.Sprintf("- %s step %d: %s: %s\n", ev.ID, ev.Step, ev.Title, ev.Prose)
+			}
+		}
+		prompt += "Answer with the same JSON format, reacting only within your authority.\n"
 	}
 	var reply *agents.LogographerReply
 	err := retryParse(s, ctx, "logographer:"+regionID, agents.SystemLogographer(), prompt, 0.8, s.b.MaxOutputTokens,
@@ -449,7 +466,7 @@ func (s *stepRun) askConsult(ctx context.Context, regionID string, view *knowled
 	return reply, nil
 }
 
-func (s *stepRun) askOrchestrator(ctx context.Context, prompt string) (*agents.OrchestratorReply, error) {
+func (s *stepRun) askOrchestrator(ctx context.Context, prompt string, reactionsOK bool) (*agents.OrchestratorReply, error) {
 	var reply *agents.OrchestratorReply
 	maxTok := s.b.MaxOutputTokensOrchestr
 	if maxTok <= 0 {
@@ -471,6 +488,13 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt string) (*agents.O
 			for _, ds := range r.DirectiveStatus {
 				if s.snap.Directives[ds.ID] == nil {
 					return fmt.Errorf("unknown directive %q in directive_status", ds.ID)
+				}
+			}
+			if reactionsOK {
+				for region, rx := range r.Reactions {
+					if err := s.pv.ValidateReaction(domain.ID(region), rx); err != nil {
+						return err
+					}
 				}
 			}
 			reply = r

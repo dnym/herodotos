@@ -16,7 +16,8 @@ Reply with ONE JSON object and nothing else:
      "delivery": {"region-id": <earliest step news arrives>}}
   ],
   "directive_status": [{"id": "dir-...", "status": "pending | active | fulfilled | conflicting"}],
-  "reactions": {"<region id>": "<specific question those historians must answer>"},
+  "reactions": {"<region id>": {"question": "<specific question those historians must answer>",
+                                "premise": ["evt-...", ...]}},
   "pause": null
 }
 
@@ -38,7 +39,11 @@ Rules:
   active|ended. Nuance goes in attrs.
 - Interacting proposals must collapse to one shared outcome. No region
   may dictate another region's response. Ask for reactions sparingly and
-  only when a real missing decision blocks the step.
+  only when a real missing decision blocks the step. A reaction's
+  "premise" must list canonical events that region could already know:
+  its own recent history or reports delivered to it by now. Never base
+  a question on news not yet delivered, nor on another region's
+  private affairs.
 - Accept proposals that do not interact; do not rewrite what works.
 - Preserve causality: every final event must carry at least one "causes"
   entry naming a canonical event it follows from (step 1 excepted).

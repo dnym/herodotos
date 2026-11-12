@@ -447,31 +447,87 @@ func TestTruncatedReplyCorrected(t *testing.T) {
 
 func TestReactionRound(t *testing.T) {
 	db, ctx := setup(t)
+	// Step 1 commits a scare authored by prin-b itself, so the event is
+	// legitimately visible to B at step 2: a reaction may rest on it.
+	bScare := `{"prose":"Watchfires on the march.","events":[{"type":"development","title":"Watchfires on the march","prose":"B's march wards light signal fires.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"mood":"grim"}}]}],"memory":{"summary":"Watchfires lit."}}`
+	orchScare := `{"notes":"A local alert.","events":[{"origin":"prin-b","type":"development","title":"Watchfires on the march","prose":"B's march wards light signal fires.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"mood":"grim"}}]}]}`
 	prinReact := `{"prose":"The principality mobilizes cautiously.","events":[{"type":"interaction","title":"Border guards on alert","prose":"B's garrisons watch the frontier.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alert":"elevated"}}]}],"memory":{"summary":"Alert on the border."}}`
-	orch1 := `{"notes":"need B's reaction","events":[],"reactions":{"prin-b":"How does your principality respond to the rioting across the border?"}}`
-	orch2 := `{"notes":"Resolved.","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"],"delivery":{"prin-b":3}},{"origin":"prin-b","type":"interaction","title":"Border guards on alert","prose":"B's garrisons watch the frontier.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alert":"elevated"}}]}]}`
+	orch1 := `{"notes":"need B's reaction","events":[],"reactions":{"prin-b":{"question":"How does your principality respond to its own watchfire scare?","premise":["evt-000001"]}}}`
+	orch2 := `{"notes":"Merged the reaction.","events":[{"origin":"prin-b","type":"interaction","title":"Border guards on alert","prose":"B's garrisons watch the frontier.","causes":["evt-000001"],"changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alert":"elevated"}}]}]}`
 	fake := &inference.Scripted{Replies: []inference.Reply{
-		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: bScare},
+		{Role: "orchestrator", Text: orchScare},
+		// step 2
+		{Role: "logographer:king-a", Text: prinQuiet},
 		{Role: "logographer:prin-b", Text: prinQuiet},
 		{Role: "orchestrator", Text: orch1},
 		{Role: "logographer:prin-b", Text: prinReact},
+		// Second adjudication round: the reaction is merged into the
+		// step; no further reactions are requested, which ends the loop.
 		{Role: "orchestrator", Text: orch2},
 	}}
 	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
-	res, err := e.RunStep(ctx)
-	if err != nil {
-		t.Fatalf("run step: %v", err)
-	}
-	if res.ModelCalls != 5 || len(res.EventIDs) != 2 {
-		t.Fatalf("result: %+v", res)
+	for i := 0; i < 2; i++ {
+		if _, err := e.RunStep(ctx); err != nil {
+			for j, c := range fake.Calls() {
+				t.Logf("call %d role=%s", j, c.Role)
+			}
+			t.Fatalf("step %d: %v", i+1, err)
+		}
 	}
 	snap, _ := db.LoadSnapshot(ctx)
 	if snap.Regions["prin-b"].Attrs["alert"] != "elevated" {
 		t.Fatalf("reaction not committed: %v", snap.Regions["prin-b"].Attrs)
 	}
-	// The reaction question must have been delivered to B's historian.
-	if !strings.Contains(fake.Calls()[3].Prompt, "respond to the rioting") {
+
+	// The reaction question and its disclosed premise must have been
+	// delivered to B's historian.
+	rc := fake.Calls()[6] // prin-b's reaction call
+	if !strings.Contains(rc.Prompt, "respond to its own watchfire scare") {
 		t.Fatal("orchestrator question missing from reaction prompt")
+	}
+	if !strings.Contains(rc.Prompt, "events you can see in your own history") {
+		t.Fatal("reaction premise disclosure missing from prompt")
+	}
+}
+
+func TestReactionPremiseCannotLeakDelayedNews(t *testing.T) {
+	db, ctx := setup(t)
+	// Step 1: the riot is committed; news reaches prin-b only at step 3.
+	// Step 2: the orchestrator tries to ask prin-b about it — the
+	// premise is not knowable yet, so the correction round must teach
+	// that, and no reaction call may happen.
+	orchSecretTooEarly := `{"notes":"ask B","events":[],"reactions":{"prin-b":{"question":"How does the principality react to the rioting?","premise":["evt-000001"]}}}`
+	orchCorrected := `{"notes":"ask nothing","events":[]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchAccept},
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchSecretTooEarly},
+		{Role: "orchestrator", Text: orchCorrected},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	for i := 0; i < 2; i++ {
+		if _, err := e.RunStep(ctx); err != nil {
+			t.Fatalf("step %d: %v", i+1, err)
+		}
+	}
+	if !strings.Contains(fake.Calls()[6].Prompt, "not knowable by that region yet") {
+		t.Error("correction round did not carry the visibility teaching")
+	}
+	// No reaction to the secret ever reached a historian.
+	for _, c := range fake.Calls() {
+		if strings.Contains(c.Prompt, "ORCHESTRATOR ASKS YOU") {
+			t.Fatal("reaction call leaked undelivered news")
+		}
+	}
+	// The step still committed the riot normally.
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Regions["king-a"].Attrs["unrest"] != "high" {
+		t.Fatalf("step after correction: %v", snap.Regions["king-a"].Attrs)
 	}
 }
 
