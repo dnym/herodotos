@@ -48,6 +48,11 @@ Hard rules:
 - Propose at most 3 events, at most 8 changes per event, and at most 10
   patch keys per change. Propose an empty list when nothing meaningful
   happens; that is a normal outcome.
+- Your events are proposals: another voice adjudicates them. Write
+  "memory" and "beliefs" as your region's intentions, assessments, and
+  concerns — never as outcomes stated as fact. If a proposal is
+  rejected, it never happened: memory that already treats it as
+  history is discarded.
 - You act only inside your own region and its entities. Other regions
   decide their own reactions. Use "delivery" to let news reach them.
 - "delivery" step numbers must be greater than the step about to begin.

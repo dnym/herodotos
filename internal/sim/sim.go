@@ -239,12 +239,17 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		BaseRevision: snap.Meta.Revision,
 		Summary:      summarize(final.Notes),
 	}
+	// Which regions survive as authors in the adjudicated outcome.
+	represented := map[domain.ID]bool{}
 	for _, ev := range final.Events {
 		if err := st.pv.ValidateFinalEvent(&ev); err != nil {
 			return fail("final event rejected", err)
 		}
 		if ev.Origin == "" {
 			ev.Origin = "orchestrator"
+		}
+		if ev.Origin != "orchestrator" {
+			represented[ev.Origin] = true
 		}
 		ce := store.CommittedEvent{
 			Type: ev.Type, Title: ev.Title, Prose: ev.Prose,
@@ -282,6 +287,15 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 	}
 
 	for regionID, m := range memories {
+		// Rejected fiction must not survive as invented history: when a
+		// region proposed events but none of them survived adjudication
+		// under its authorship, its memory update describes outcomes
+		// that never happened — keep the previous memory instead. A
+		// quiet step's assessments (no proposals) always stand; beliefs
+		// are in-world opinions and stand on their own.
+		if len(proposals["logographer:"+regionID]) > 0 && !represented[regionID] {
+			continue
+		}
 		plan.Memories = append(plan.Memories, domain.Memory{
 			RegionID: regionID, Summary: m.Summary, OpenThreads: m.OpenThreads, UpdatedStep: newStep,
 		})

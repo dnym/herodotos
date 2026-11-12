@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dnym/herodotos/internal/agents"
 	"github.com/dnym/herodotos/internal/domain"
 	"github.com/dnym/herodotos/internal/inference"
 	"github.com/dnym/herodotos/internal/knowledge"
@@ -68,6 +69,81 @@ const kingReply = `{"prose":"Unrest spreads.","events":[{"type":"development","t
 const prinQuiet = `{"prose":"A quiet week.","events":[],"memory":{"summary":"Watching the kingdom nervously."}}`
 
 const orchAccept = `{"notes":"Accepted the regional development.","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"],"delivery":{"prin-b":3}}]}`
+
+const kingTwoProposals = `{"prose":"Unrest spreads; the queen calls a council.","events":[{"type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]},{"type":"development","title":"Emergency council named","prose":"The queen names a regency council.","changes":[{"object":"entity","object_id":"council-regency","op":"upsert","patch":{"kind":"group","name":"Regency Council","region_id":"king-a"}}]}],"memory":{"summary":"Rioting began; a regency council was named."}}`
+
+const orchPartial = `{"notes":"The riots are accepted; the council is premature.","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]},{"origin":"orchestrator","type":"development","title":"Court whispers of regency","prose":"Nameless rumors circulate; no council is named.","changes":[]}]}`
+
+const orchReplaceAll = `{"notes":"Regional account rejected; a quieter world.","events":[{"origin":"orchestrator","type":"development","title":"A tense silence","prose":"The capital holds its breath; no riots come.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"tense"}}],"affects_entities":["q-elinor"]}]}`
+
+// A region whose proposals were all rejected must not carry their
+// invented outcomes into persistent memory.
+func TestRejectedProposalsDoNotRewriteMemory(t *testing.T) {
+	db, ctx := setup(t)
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchReplaceAll},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	mem := snap.Memories["king-a"]
+	if mem.Summary != "A fragile monarchy." || mem.UpdatedStep != 0 {
+		t.Errorf("rejected outcomes entered memory: %+v", mem)
+	}
+	if snap.Regions["king-a"].Attrs["unrest"] != "tense" {
+		t.Errorf("orchestrator event should still commit: %v", snap.Regions["king-a"].Attrs)
+	}
+	// The next step must not be fed the invented history: the prompt
+	// carries the old memory, and the rejected riot never appears.
+	prompt := nextStepPrompt(t, db, ctx, "king-a")
+	if strings.Contains(prompt, "Rioting began") {
+		t.Error("next-step prompt contains invented history")
+	}
+	if !strings.Contains(prompt, "A fragile monarchy.") {
+		t.Error("next-step prompt lost the established memory")
+	}
+}
+
+// Partial acceptance keeps memory: some of the region's account became
+// history, and it is not the engine's job to split prose.
+func TestPartialAcceptanceKeepsMemory(t *testing.T) {
+	db, ctx := setup(t)
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingTwoProposals},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchPartial},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	res, err := e.RunStep(ctx)
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	if len(res.EventIDs) != 2 {
+		t.Fatalf("expected one accepted + one orchestrator event: %+v", res)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Memories["king-a"].UpdatedStep != 1 ||
+		!strings.Contains(snap.Memories["king-a"].Summary, "Rioting began") {
+		t.Errorf("partial acceptance should keep the memory update: %+v", snap.Memories["king-a"])
+	}
+}
+
+func nextStepPrompt(t *testing.T, db *store.DB, ctx context.Context, regionID string) string {
+	t.Helper()
+	snap, err := db.LoadSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := knowledge.BuildLogographerView(ctx, snap, domain.ID(regionID), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agents.RenderLogographerPrompt(snap.Meta, snap.Meta.ClockStep, view, 1<<20)
+}
 
 func TestFullStepCommitsOneSharedHistory(t *testing.T) {
 	db, ctx := setup(t)
