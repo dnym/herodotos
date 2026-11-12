@@ -167,9 +167,18 @@ func ParseOrchestratorReply(text string) (*OrchestratorReply, error) {
 
 func decodeStrictJSON(text string, v any) error {
 	s := strings.TrimSpace(text)
-	// Strip markdown fences when models add them despite instructions.
+	// Strip markdown fences when models add them despite instructions —
+	// defensively: a lone "```" from a cut-off reply must produce an
+	// error that feeds the correction round, never a panic.
 	if strings.HasPrefix(s, "```") {
-		s = strings.TrimSpace(strings.TrimSuffix(strings.SplitN(s, "\n", 2)[1], "```"))
+		_, tail, ok := strings.Cut(s, "\n")
+		if !ok {
+			return fmt.Errorf("reply is a stray code fence with no JSON")
+		}
+		s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(tail), "```"))
+	}
+	if !strings.HasPrefix(s, "{") {
+		return fmt.Errorf("reply is not a JSON object (starts with %q)", firstRune(s))
 	}
 	dec := json.NewDecoder(strings.NewReader(s))
 	// Unknown keys usually mean the model invented a schema ("deliveries"
@@ -178,7 +187,23 @@ func decodeStrictJSON(text string, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
+	// Exactly one JSON value: a second object or trailing prose means the
+	// model answered twice or narrated after the JSON.
+	if dec.More() {
+		return fmt.Errorf("reply carries more than one JSON value")
+	}
 	return nil
+}
+
+func firstRune(s string) string {
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)[0]
+	if r > 127 {
+		return "?"
+	}
+	return string(r)
 }
 
 // RenderLogographerPrompt builds the step context for one regional agent.

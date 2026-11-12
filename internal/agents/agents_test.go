@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -162,5 +163,59 @@ func TestConsultDocsResolution(t *testing.T) {
 	}
 	if section := RenderConsultSection(got); !strings.Contains(section, "REFERENCE DOCUMENTS YOU REQUESTED") {
 		t.Errorf("consult section missing: %q", section)
+	}
+}
+
+func TestMalformedRepliesNeverPanic(t *testing.T) {
+	// Anything a truncated or confused model can emit must surface as a
+	// parse error for the correction round, never as a panic, and never
+	// as a successful decode of garbage.
+	inputs := []string{
+		"", " ", "```", "```json", "```", "\n", "```{", "```{bad json",
+		"{", "{not json}", "[]", "null", "42", `"text reply"`,
+		`{"prose":"ok"}{"prose":"second"}`,
+		`{"prose":"ok"} trailing narration`,
+		`{"prose":"ok", "deliveries": {}}`,
+		"```json\n{\"prose\":\"fenced\",\"events\":[]}\n```",
+	}
+	for _, in := range inputs {
+		t.Run(in, func(t *testing.T) {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("panic on input %q: %v", in, p)
+				}
+			}()
+			_, err := ParseLogographerReply(in)
+			wantOK := in == "```json\n{\"prose\":\"fenced\",\"events\":[]}\n```"
+			if wantOK && err != nil {
+				t.Errorf("valid fenced reply rejected: %v", err)
+			}
+			if !wantOK && err == nil {
+				t.Errorf("malformed reply accepted: %q", in)
+			}
+		})
+	}
+}
+
+func TestFuzzParseNeverPanics(t *testing.T) {
+	// Deterministic pseudo-fuzz: random noise from a fixed seed must
+	// produce errors, never panics.
+	alphabet := []rune("{}[]\"`,:nulstre12 \n\t\\")
+	rng := rand.New(rand.NewSource(7))
+	for i := 0; i < 2000; i++ {
+		b := make([]rune, 1+rng.Intn(30))
+		for j := range b {
+			b[j] = alphabet[rng.Intn(len(alphabet))]
+		}
+		s := string(b)
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("panic on input %q: %v", s, p)
+				}
+			}()
+			_, _ = ParseLogographerReply(s)
+			_, _ = ParseOrchestratorReply(s)
+		}()
 	}
 }
