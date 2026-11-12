@@ -65,7 +65,9 @@ reference documents: binding documents are world rules the orchestrator
 adjudicates against; advisory documents follow the skill pattern — a
 one-line description is always shown to the historians of the relevant
 scope, and the body is loaded only when its keywords match what that
-region is dealing with. The same documents can be managed with
+region is dealing with — a historian may also name up to 3 cataloged
+ids in a "consult" field, and the engine answers with one follow-up
+call carrying those full texts. The same documents can be managed with
 `herodotos refs`. `/export` downloads the
 entire canonical world as one JSON document. Mutation endpoints reject
 cross-origin requests. The prose UI is set in vendored EB Garamond

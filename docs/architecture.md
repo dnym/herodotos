@@ -120,9 +120,14 @@ the way they were sketched:
   auto-retrieved by deterministic keyword scoring against the region's
   current situation (region name, attributes, entity names, memory,
   recent events — top 3 bodies per prompt), and otherwise appear as an
-  id/title/description catalog. No embeddings and no inference are
-  spent on retrieval; if keyword matching proves too coarse, the view
-  builder (`internal/knowledge.classifyReferences`) is the seam where
+  id/title/description catalog. A historian may also answer with a
+  "consult" field naming up to 3 cataloged ids: the engine spends one
+  bounded follow-up call re-asking that region with those full texts
+  (no second round; unknown or out-of-scope ids are dropped; the round
+  counts against `MaxModelCallsPerStep`). No embeddings and no
+  inference are spent on automatic retrieval; if keyword matching
+  proves too coarse, the view builder
+  (`internal/knowledge.classifyReferences`) is the seam where
   something smarter would slot in.
 - **Belief storage is append-and-prune, not merge.** Each logographer
   may record up to four new or changed beliefs per reply; the store
