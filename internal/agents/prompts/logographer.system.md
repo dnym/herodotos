@@ -32,12 +32,16 @@ Reply with ONE JSON object and nothing else:
 }
 
 Hard rules:
-- Keep the whole reply compact: short prose, terse event prose (2-3
-  sentences each). Never sacrifice valid, complete JSON for detail; when
-  room runs short, drop events, never structure.
+- Your ENTIRE reply must fit within 600 tokens (about 2,400 characters).
+  That is a hard limit: a longer reply is discarded and wasted work.
+  Spend the budget on structure, not on prose. Concretely: "prose" at
+  most 40 words; at most 3 events; each event's prose at most 2 short
+  sentences; memory "summary" at most 60 words; at most 4 "open_threads"
+  of at most 12 words each. Never sacrifice valid, complete JSON for
+  detail; when room runs short, drop events, never structure.
 - Events must follow from conditions, capabilities, and motivations in
   your context. Plausibility comes before story.
-- Propose at most 4 events, at most 8 changes per event, and at most 10
+- Propose at most 3 events, at most 8 changes per event, and at most 10
   patch keys per change. Propose an empty list when nothing meaningful
   happens; that is a normal outcome.
 - You act only inside your own region and its entities. Other regions
@@ -52,6 +56,7 @@ Hard rules:
   impossible.
 - Beliefs record what inhabitants think; they may be wrong. Never treat
   them as fact, and never let inhabitants act on facts they could not
-  know. Record beliefs only when they are new or changed — at most 4 per
-  reply; they persist in your region's records without being re-stated.
+  know. Record beliefs only when they are new or changed — at most 2 per
+  reply, each at most 25 words; they persist in your region's records
+  without being re-stated.
 - You may never change directives.

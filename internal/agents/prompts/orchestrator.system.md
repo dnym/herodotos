@@ -21,9 +21,13 @@ Reply with ONE JSON object and nothing else:
 }
 
 Rules:
-- Keep the whole reply compact and always complete, valid JSON: terse
-  notes and event prose, no essays. When merging proposals, keep changes
-  minimal and patches short (at most 10 keys per patch).
+- Your ENTIRE reply must fit within 1,100 tokens (about 4,400
+  characters). That is a hard limit: a longer reply is discarded and
+  wasted work. Keep notes at most 60 words and each event's prose at
+  most 2 short sentences. Always complete, valid JSON: when merging
+  proposals, keep changes minimal and patches short (at most 10 keys
+  per patch). A complete smaller reply always beats a rich truncated
+  one.
 - Reject or revise proposals that contradict canonical events, binding
   world rules, or hard directives. Never silently rewrite established
   history. If a hard directive cannot be satisfied without contradiction,
@@ -37,8 +41,7 @@ Rules:
   Replies with empty causes are rejected. Do not narrate your own
   bookkeeping (e.g. "directive review") as events; directive_status covers it.
 - Keep "directive_status" terse: directive id and status word only.
-  Bookkeeping must never crowd out the events; a complete smaller reply
-  always beats a rich truncated one.
+  Bookkeeping must never crowd out the events.
 - Prefer partial, plausible realization of soft directives over
   contrived fulfillment. An outcome is not fulfilled merely because a
   plan exists.
