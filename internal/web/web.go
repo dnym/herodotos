@@ -96,6 +96,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /attempts", s.pageAttempts)
 	mux.HandleFunc("GET /attempt", s.pageAttempt)
 	mux.HandleFunc("GET /run/panel", s.partialRunPanel)
+	mux.HandleFunc("GET /references", s.pageReferences)
 	mux.HandleFunc("GET /export", s.pageExport)
 	// Every mutation must be same-origin: the server never sets CORS
 	// allow headers, and a carried Origin must match the Host. That is
@@ -107,6 +108,9 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /run/resume", mutation(s.actionResumeWorld))
 	mux.Handle("POST /directive/edit", mutation(s.actionDirectiveEdit))
 	mux.Handle("POST /directive/add", mutation(s.actionDirectiveAdd))
+	mux.Handle("POST /reference/add", mutation(s.actionReferenceAdd))
+	mux.Handle("POST /reference/update", mutation(s.actionReferenceUpdate))
+	mux.Handle("POST /reference/delete", mutation(s.actionReferenceDelete))
 	// embed paths keep the static/ prefix, so the URI maps directly.
 	mux.Handle("GET /static/", http.FileServerFS(assets))
 	return logRequests(mux)
@@ -338,6 +342,92 @@ func (s *Server) actionDirectiveAdd(w http.ResponseWriter, r *http.Request) {
 		kind = "hard"
 	}
 	redirectFlash(w, r, "/", "directive "+id+" added ("+kind+")", false)
+}
+
+// --- reference documents (human-authored creative direction) ---
+
+func (s *Server) pageReferences(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	refs, err := s.DB.ListReferences(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	regions, err := s.DB.ListRegions(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.render(w, "references", "References", r, struct {
+		Refs    []domain.ReferenceDoc
+		Regions []domain.Region
+	}{refs, regions})
+}
+
+// refFromForm reads one reference form. Validation is deliberately left
+// to the store layer so the error reaches the user verbatim.
+func refFromForm(r *http.Request) domain.ReferenceDoc {
+	ref := domain.ReferenceDoc{
+		ID:          domain.ID(strings.TrimSpace(r.FormValue("id"))),
+		Scope:       strings.TrimSpace(r.FormValue("scope")),
+		RegionID:    domain.ID(strings.TrimSpace(r.FormValue("region"))),
+		Binding:     r.FormValue("binding") == "1",
+		Enabled:     r.FormValue("enabled") == "1",
+		Title:       strings.TrimSpace(r.FormValue("title")),
+		Description: strings.TrimSpace(r.FormValue("description")),
+		Body:        strings.TrimSpace(r.FormValue("body")),
+		Keywords:    strings.TrimSpace(r.FormValue("keywords")),
+	}
+	if ref.Scope == "" {
+		ref.Scope = "world"
+	}
+	return ref
+}
+
+func (s *Server) actionReferenceAdd(w http.ResponseWriter, r *http.Request) {
+	ref := refFromForm(r)
+	id, err := s.DB.CreateReference(r.Context(), ref)
+	if err != nil {
+		redirectFlash(w, r, "/references", "could not add reference: "+err.Error(), true)
+		return
+	}
+	redirectFlash(w, r, "/references", "reference "+id+" added", false)
+}
+
+func (s *Server) actionReferenceUpdate(w http.ResponseWriter, r *http.Request) {
+	ref := refFromForm(r)
+	if !domain.ValidID(string(ref.ID)) {
+		redirectFlash(w, r, "/references", "reference update needs a valid id", true)
+		return
+	}
+	ok, err := s.DB.UpdateReference(r.Context(), ref)
+	if err != nil {
+		redirectFlash(w, r, "/references", "update failed: "+err.Error(), true)
+		return
+	}
+	if !ok {
+		redirectFlash(w, r, "/references", "no such reference: "+string(ref.ID), true)
+		return
+	}
+	state := "enabled"
+	if !ref.Enabled {
+		state = "parked"
+	}
+	redirectFlash(w, r, "/references", "reference "+string(ref.ID)+" updated ("+state+")", false)
+}
+
+func (s *Server) actionReferenceDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("id")
+	ok, err := s.DB.DeleteReference(r.Context(), domain.ID(id))
+	if err != nil || !ok {
+		msg := "no such reference: " + id
+		if err != nil {
+			msg = "delete failed: " + err.Error()
+		}
+		redirectFlash(w, r, "/references", msg, true)
+		return
+	}
+	redirectFlash(w, r, "/references", "reference "+id+" deleted", false)
 }
 
 // --- export ---

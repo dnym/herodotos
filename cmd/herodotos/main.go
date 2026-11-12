@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/dnym/herodotos/internal/config"
+	"github.com/dnym/herodotos/internal/domain"
 	"github.com/dnym/herodotos/internal/inference"
 	"github.com/dnym/herodotos/internal/sim"
 	"github.com/dnym/herodotos/internal/store"
@@ -26,6 +27,7 @@ Usage:
   herodotos run     --steps N [--db <path>]              advance N consecutive steps
   herodotos inspect [--db <path>] [--events N]           show world state summary
   herodotos resume  [--db <path>]                        lift a durable world pause
+  herodotos refs    list|add|delete [--db <path>] ...     manage reference documents
   herodotos serve   [--db <path>] [--addr host:port]     serve the web overview
 
 Inference for step/run/serve comes from the environment:
@@ -67,6 +69,8 @@ func main() {
 		err = runInspect(ctx, args)
 	case "resume":
 		err = runResume(ctx, args)
+	case "refs":
+		err = runRefs(ctx, args)
 	case "serve":
 		err = runServe(ctx, args)
 	case "-h", "--help", "help":
@@ -247,6 +251,92 @@ func runResume(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("world resumed (pause was: %s)\n", reason)
 	return nil
+}
+
+// runRefs manages human-authored reference documents from the command
+// line: the same material the /references web page edits.
+func runRefs(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("refs needs a subcommand: list, add --file doc.md, or delete <id>")
+	}
+	sub, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("refs "+sub, flag.ExitOnError)
+	dbPath := fs.String("db", "world.db", "path to the world database")
+	file := fs.String("file", "", "markdown file (refs add); optional front matter sets id, title, description, scope, region, binding, keywords")
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	db, err := store.Open(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	switch sub {
+	case "list":
+		refs, err := db.ListReferences(ctx)
+		if err != nil {
+			return err
+		}
+		if len(refs) == 0 {
+			fmt.Println("no reference documents")
+			return nil
+		}
+		for _, ref := range refs {
+			flags := "advisory"
+			if ref.Binding {
+				flags = "binding"
+			}
+			if !ref.Enabled {
+				flags += ", parked"
+			}
+			scope := ref.Scope
+			if scope == "region" {
+				scope += " " + string(ref.RegionID)
+			}
+			fmt.Printf("%s [%s/%s] %s\n", ref.ID, scope, flags, ref.Title)
+			if ref.Description != "" {
+				fmt.Printf("    %s\n", ref.Description)
+			}
+			if ref.Keywords != "" {
+				fmt.Printf("    keywords: %s\n", ref.Keywords)
+			}
+		}
+		return nil
+	case "add":
+		if *file == "" {
+			return errors.New("refs add needs --file <doc.md>")
+		}
+		text, err := os.ReadFile(*file)
+		if err != nil {
+			return err
+		}
+		ref, err := store.ParseRefMarkdown(string(text))
+		if err != nil {
+			return fmt.Errorf("%s: %w", *file, err)
+		}
+		id, err := db.CreateReference(ctx, ref)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("reference %s added: %s\n", id, ref.Title)
+		return nil
+	case "delete":
+		if fs.NArg() != 1 {
+			return errors.New("refs delete needs exactly one reference id")
+		}
+		ok, err := db.DeleteReference(ctx, domain.ID(fs.Arg(0)))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("no such reference: %s", fs.Arg(0))
+		}
+		fmt.Printf("reference %s deleted\n", fs.Arg(0))
+		return nil
+	default:
+		return fmt.Errorf("unknown refs subcommand %q (want list, add, or delete)", sub)
+	}
 }
 
 func runInspect(ctx context.Context, args []string) error {

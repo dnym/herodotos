@@ -112,11 +112,18 @@ the way they were sketched:
   revisited only if evaluation shows `open_threads` losing threads
   that matter; adding it earlier risks the engine hard-coding
   civilization semantics it must not own.
-- **Keyword-scored reference retrieval.** Deferred. References are
-  scoped correctly (world + own region only) and included in full;
-  prompts are byte-budgeted (`MaxPromptBytes`), so retrieval scoring
-  buys nothing at current world sizes. The view builder is the seam
-  where retrieval would slot in if reference corpora grow.
+- **Reference retrieval is keyword-scored, not semantic.** References
+  follow the skill pattern: each has a one-line `description` always
+  shown to scoped agents, and its body loads only when needed. Binding
+  documents always appear in full (logographer prompts and the
+  orchestrator's BINDING REFERENCES section); advisory documents are
+  auto-retrieved by deterministic keyword scoring against the region's
+  current situation (region name, attributes, entity names, memory,
+  recent events — top 3 bodies per prompt), and otherwise appear as an
+  id/title/description catalog. No embeddings and no inference are
+  spent on retrieval; if keyword matching proves too coarse, the view
+  builder (`internal/knowledge.classifyReferences`) is the seam where
+  something smarter would slot in.
 - **Belief storage is append-and-prune, not merge.** Each logographer
   may record up to four new or changed beliefs per reply; the store
   keeps the twelve newest per region. There is no belief revision

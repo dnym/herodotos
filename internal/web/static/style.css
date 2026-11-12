@@ -109,6 +109,25 @@ button:hover { background: var(--accent-dark); }
 button:disabled { opacity: .5; cursor: wait; }
 button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--rule); }
 button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+button.danger { background: var(--bad); }
+button.danger:hover { background: #7a312c; }
+
+/* --- reference management --- */
+
+.refdoc {
+  border: 1px solid var(--rule); background: var(--surface);
+  padding: .6rem .9rem; margin: .7rem 0;
+}
+.refdoc.parked { opacity: .55; }
+.refdoc form { margin: 0; }
+.refhead { display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline; }
+.refhead code { font-family: var(--mono); font-size: .8rem; }
+.refgrid input[type="text"], .refgrid textarea {
+  font: inherit; font-size: .9rem; max-width: 100%;
+  padding: .3rem .45rem; border: 1px solid var(--rule); background: var(--paper);
+}
+.refgrid textarea { font-family: var(--mono); font-size: .8rem; }
+.refgrid select, .refgrid label { font-family: var(--sans); font-size: .85rem; }
 
 .htmx-indicator {
   opacity: 0; font-family: var(--sans); font-size: .82rem; color: var(--muted);

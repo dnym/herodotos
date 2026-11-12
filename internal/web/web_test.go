@@ -501,6 +501,87 @@ func TestLiveAttemptView(t *testing.T) {
 	get(t, ts, "/attempt?id=att-999999", http.StatusNotFound)
 }
 
+func TestReferenceAdmin(t *testing.T) {
+	s := newTestServer(t, true)
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	body := get(t, ts, "/references", http.StatusOK)
+	if !strings.Contains(body, "Add a document") {
+		t.Errorf("references page missing add form: %s", body)
+	}
+
+	// Add a region-scoped advisory reference.
+	resp := postForm(t, ts, "/reference/add", url.Values{
+		"scope": {"region"}, "region": {"king-a"},
+		"title": {"Tide ritual"}, "description": {"how coastal folk read the tides"},
+		"keywords": {"tide ritual coast"}, "body": {"The tide ritual binds salt to memory."},
+	}, "")
+	if resp.StatusCode != http.StatusSeeOther && resp.StatusCode != http.StatusFound {
+		t.Fatalf("add status %d", resp.StatusCode)
+	}
+	refs, err := s.DB.ListReferences(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].Title != "Tide ritual" || !refs[0].Enabled {
+		t.Fatalf("refs after add: %+v", refs)
+	}
+	// It is visible in the agent snapshot immediately.
+	snap, err := s.DB.LoadSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.RegionRefs["king-a"]) != 1 {
+		t.Errorf("new reference not in snapshot: %+v", snap.RegionRefs)
+	}
+	body = get(t, ts, "/references", http.StatusOK)
+	if !strings.Contains(body, "Tide ritual") {
+		t.Error("page does not list the new reference")
+	}
+
+	// Park it: same fields, but no enabled checkbox.
+	postForm(t, ts, "/reference/update", url.Values{
+		"id": {string(refs[0].ID)}, "scope": {"region"}, "region": {"king-a"},
+		"title": {"Tide ritual"}, "keywords": {"tide ritual coast"},
+		"body": {"The tide ritual binds salt to memory."},
+	}, "").Body.Close()
+	snap, err = s.DB.LoadSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.RegionRefs["king-a"]) != 0 {
+		t.Errorf("parked reference still in snapshot")
+	}
+	refs, _ = s.DB.ListReferences(context.Background())
+	if len(refs) != 1 || refs[0].Enabled {
+		t.Errorf("parking not persisted: %+v", refs)
+	}
+
+	// Validation surfaces as a flash, not a broken world.
+	postForm(t, ts, "/reference/add", url.Values{
+		"scope": {"region"}, "title": {"no region"}, "body": {"x"},
+	}, "").Body.Close()
+	if refs, _ = s.DB.ListReferences(context.Background()); len(refs) != 1 {
+		t.Errorf("invalid form created a reference: %+v", refs)
+	}
+	get(t, ts, "/references", http.StatusOK) // flash renders fine
+
+	// Cross-origin mutation is refused.
+	resp = postForm(t, ts, "/reference/add", url.Values{
+		"title": {"evil"}, "body": {"x"},
+	}, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-origin add status %d", resp.StatusCode)
+	}
+
+	// Delete.
+	postForm(t, ts, "/reference/delete", url.Values{"id": {string(refs[0].ID)}}, "").Body.Close()
+	if refs, _ = s.DB.ListReferences(context.Background()); len(refs) != 0 {
+		t.Errorf("refs after delete: %+v", refs)
+	}
+}
+
 func TestStepWithoutInference(t *testing.T) {
 	s := newTestServer(t, false)
 	ts := httptest.NewServer(s.routes())

@@ -46,6 +46,8 @@ herodotos serve --db world.db       # web overview on http://127.0.0.1:8080
 herodotos step --db world.db --scripted testdata/model-responses/four-regions-step1.json
 herodotos inspect --db world.db
 herodotos resume --db world.db      # lift a durable world pause
+herodotos refs list --db world.db   # human-authored reference documents
+herodotos refs add --file magic.md  # ingest a markdown reference
 ```
 
 `serve` shows the world overview, timeline, per-attempt diagnostics
@@ -58,7 +60,13 @@ pause is durable world state: it survives restarts, blocks further
 steps, and the overview explains it until you resolve the conflict and
 resume — from the browser or `herodotos resume`. Directive text can be
 edited and new directives added from the overview (the historians
-never change directives themselves), and `/export` downloads the
+never change directives themselves). `/references` manages human-authored
+reference documents: binding documents are world rules the orchestrator
+adjudicates against; advisory documents follow the skill pattern — a
+one-line description is always shown to the historians of the relevant
+scope, and the body is loaded only when its keywords match what that
+region is dealing with. The same documents can be managed with
+`herodotos refs`. `/export` downloads the
 entire canonical world as one JSON document. Mutation endpoints reject
 cross-origin requests. The prose UI is set in vendored EB Garamond
 (SIL OFL 1.1); no external assets are fetched at runtime. Exactly one

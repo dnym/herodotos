@@ -1,0 +1,84 @@
+{{template "header" .}}
+
+{{$d := .Inner}}
+<h1>Reference documents</h1>
+<p class="hint">Human-authored background and rules. <strong>Binding</strong> documents
+are world rules the orchestrator adjudicates against; advisory documents follow the
+skill pattern: the description is always shown to scoped historians, the full body
+loads when its keywords match what a region is dealing with. Agents never edit these.</p>
+
+<section>
+  <h2>Documents</h2>
+  {{if not $d.Refs}}<p class="hint">None yet.</p>{{end}}
+  {{range $r := $d.Refs}}
+  <article class="refdoc{{if not $r.Enabled}} parked{{end}}">
+    <form method="post" action="/reference/update" class="refgrid">
+      <input type="hidden" name="id" value="{{$r.ID}}">
+      <p class="refhead">
+        <code>{{$r.ID}}</code>
+        <label>scope
+          <select name="scope">
+            <option value="world"{{if eq $r.Scope "world"}} selected{{end}}>world</option>
+            <option value="region"{{if eq $r.Scope "region"}} selected{{end}}>region</option>
+          </select>
+        </label>
+        <label>region
+          <select name="region">
+            <option value="">—</option>
+            {{range $reg := $d.Regions}}
+            <option value="{{$reg.ID}}"{{if eq $reg.ID $r.RegionID}} selected{{end}}>{{$reg.Name}} ({{$reg.ID}})</option>
+            {{end}}
+          </select>
+        </label>
+        <label><input type="checkbox" name="binding" value="1"{{if $r.Binding}} checked{{end}}> binding</label>
+        <label><input type="checkbox" name="enabled" value="1"{{if $r.Enabled}} checked{{end}}> enabled</label>
+      </p>
+      <p><input type="text" name="title" value="{{$r.Title}}" size="40" required></p>
+      <p><input type="text" name="description" value="{{$r.Description}}" size="70"
+               placeholder="one line, always shown to scoped agents"></p>
+      <p><input type="text" name="keywords" value="{{$r.Keywords}}" size="40"
+                placeholder="keywords that pull the body into a prompt"></p>
+      <p><textarea name="body" rows="6" cols="78" required>{{$r.Body}}</textarea></p>
+      <p><button type="submit">save</button></p>
+    </form>
+    <form method="post" action="/reference/delete" onsubmit="return confirm('delete {{$r.ID}}?')">
+      <input type="hidden" name="id" value="{{$r.ID}}">
+      <button type="submit" class="danger">delete</button>
+    </form>
+  </article>
+  {{end}}
+</section>
+
+<section>
+  <h2>Add a document</h2>
+  <p class="hint">Markdown files with front matter can also be ingested with
+    <code>herodotos refs add --file doc.md</code>.</p>
+  <form method="post" action="/reference/add" class="refgrid">
+    <p class="refhead">
+      <label>scope
+        <select name="scope">
+          <option value="world" selected>world</option>
+          <option value="region">region</option>
+        </select>
+      </label>
+      <label>region
+        <select name="region">
+          <option value="">—</option>
+          {{range $reg := $d.Regions}}
+          <option value="{{$reg.ID}}">{{$reg.Name}} ({{$reg.ID}})</option>
+          {{end}}
+        </select>
+      </label>
+      <label><input type="checkbox" name="binding" value="1"> binding</label>
+    </p>
+    <p><input type="text" name="title" size="40" placeholder="title" required></p>
+    <p><input type="text" name="description" size="70"
+              placeholder="one line, always shown to scoped agents"></p>
+    <p><input type="text" name="keywords" size="40"
+              placeholder="keywords that pull the body into a prompt"></p>
+    <p><textarea name="body" rows="8" cols="78" placeholder="the reference text" required></textarea></p>
+    <p><button type="submit">add reference</button></p>
+  </form>
+</section>
+
+{{template "footer" .}}

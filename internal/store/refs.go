@@ -85,6 +85,33 @@ func (d *DB) DeleteReference(ctx context.Context, id domain.ID) (bool, error) {
 	return n == 1, err
 }
 
+// ListReferences returns every reference document, disabled ones
+// included, for the human-facing management view. (Agent context views
+// use the snapshot, which filters to enabled documents.)
+func (d *DB) ListReferences(ctx context.Context) ([]domain.ReferenceDoc, error) {
+	rows, err := d.sqlDB.QueryContext(ctx,
+		`SELECT id, scope, COALESCE(region_id,''), binding, title, body, keywords,
+		        COALESCE(description,''), enabled
+		 FROM reference_docs ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ReferenceDoc
+	for rows.Next() {
+		var ref domain.ReferenceDoc
+		var binding, enabled int
+		if err := rows.Scan(&ref.ID, &ref.Scope, &ref.RegionID, &binding, &ref.Title,
+			&ref.Body, &ref.Keywords, &ref.Description, &enabled); err != nil {
+			return nil, err
+		}
+		ref.Binding = binding == 1
+		ref.Enabled = enabled == 1
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}
+
 func validateRef(ref domain.ReferenceDoc) error {
 	switch ref.Scope {
 	case "world":
