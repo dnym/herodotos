@@ -291,6 +291,25 @@ func TestRunPausesAtStepBoundary(t *testing.T) {
 	}
 }
 
+func TestShutdownStopsAndJoinsRun(t *testing.T) {
+	s := newTestServer(t, true)
+	s.Engine.Client = &slowClient{inner: &inference.Scripted{Replies: quietStep()}, delay: 300 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.runCtx = ctx
+	if err := s.beginRun(-1); err != nil {
+		t.Fatal(err)
+	}
+	waitAttempts(t, s, 1) // a step is underway
+	cancel()
+	done := make(chan struct{})
+	go func() { s.runWg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run goroutine still running after shutdown: the CLI could close the DB under it")
+	}
+}
+
 func TestWorldPauseShowsInPanelAndResumes(t *testing.T) {
 	s := newTestServer(t, true)
 	pausing := append(quietStep()[:2], inference.Reply{Role: "orchestrator",

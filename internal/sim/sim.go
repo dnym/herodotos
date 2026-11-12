@@ -594,8 +594,18 @@ func (s *stepRun) call(ctx context.Context, role, system, prompt string, temp fl
 	if callErr != nil {
 		errStr = callErr.Error()
 	}
-	if recErr := s.e.DB.RecordModelCall(ctx, s.attempt, role, s.e.ModelName, hex.EncodeToString(sum[:]),
-		reqJSON, respJSON, resp.InputTokens, resp.OutputTokens, dur, errStr); recErr != nil {
+	// Diagnostics must survive shutdown: recording runs on a short
+	// detached context, so a cancelled inference context (Ctrl-C during
+	// a run) still leaves the final call in the trace instead of
+	// replacing the real error with a storage failure.
+	recCtx, recCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	recErr := s.e.DB.RecordModelCall(recCtx, s.attempt, role, s.e.ModelName, hex.EncodeToString(sum[:]),
+		reqJSON, respJSON, resp.InputTokens, resp.OutputTokens, dur, errStr)
+	recCancel()
+	if recErr != nil {
+		if callErr != nil {
+			return "", false, callErr
+		}
 		return "", false, fmt.Errorf("record model call: %w", recErr)
 	}
 	if callErr != nil {

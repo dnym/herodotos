@@ -42,6 +42,10 @@ type Server struct {
 	// down should.
 	runCtx context.Context
 
+	// runWg tracks the background run goroutine so shutdown can join
+	// it before the caller closes the database.
+	runWg sync.WaitGroup
+
 	tmpl *template.Template
 }
 
@@ -82,6 +86,11 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		httpSrv.Shutdown(shutCtx)
 	}()
 	err = httpSrv.ListenAndServe()
+	// The listener is gone: stop and join the background run before
+	// returning, so the CLI never closes the database underneath a
+	// step still committing.
+	cancelRun()
+	s.runWg.Wait()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -149,16 +158,28 @@ func (s *Server) beginRun(steps int) error {
 	}
 	rs := &runState{Active: true, Until: steps}
 	s.run = rs
+	s.runWg.Add(1)
 	go s.runLoop(rs)
 	return nil
 }
 
 func (s *Server) runLoop(rs *runState) {
+	defer s.runWg.Done()
 	ctx := s.runCtx
 	if ctx == nil {
 		ctx = context.Background() // direct route wiring in tests
 	}
 	for {
+		if ctx.Err() != nil {
+			s.finishRun(rs, "server shutting down: step loop stopped at boundary")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			s.finishRun(rs, "server shutting down: step loop stopped at boundary")
+			return
+		default:
+		}
 		s.runMu.Lock()
 		pauseRequested := rs.PauseRequested
 		s.runMu.Unlock()
