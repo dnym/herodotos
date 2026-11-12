@@ -347,6 +347,83 @@ func TestReactionRound(t *testing.T) {
 	}
 }
 
+func TestConsultRoundGroundsProposal(t *testing.T) {
+	db, ctx := setup(t)
+	// One cataloged reference visible to king-a (keywords do not match
+	// its context), one private to prin-b.
+	if _, err := db.CreateReference(ctx, domain.ReferenceDoc{
+		Scope: "region", RegionID: "king-a", Title: "Granary law",
+		Body:        "No hoarding in famine years under penalty of the square.",
+		Description: "old granary law", Keywords: "hoarding famine",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateReference(ctx, domain.ReferenceDoc{
+		Scope: "region", RegionID: "prin-b", Title: "Prince's cipher",
+		Body: "SECRET CIPHER TEXT", Description: "private codes", Keywords: "cipher",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	kingConsult := `{"prose":"I should check the old granary law before proposing.","events":[],"memory":{"summary":"Consulting the old law."},"consult":["ref-000001","ref-999999","ref-000002"]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingConsult},
+		{Role: "logographer:king-a:consult", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchAccept},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	res, err := e.RunStep(ctx)
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+
+	// The follow-up call happened, and its prompt carried the requested
+	// body — but not another region's reference (ref-000002 dropped: not
+	// visible; ref-999999 dropped: unknown).
+	if res.ModelCalls != 4 {
+		t.Fatalf("model calls: %+v", res)
+	}
+	consultPrompt := fake.Calls()[1].Prompt
+	if !strings.Contains(consultPrompt, "REFERENCE DOCUMENTS YOU REQUESTED") ||
+		!strings.Contains(consultPrompt, "No hoarding in famine years") {
+		t.Errorf("consult prompt lacks requested body")
+	}
+	if strings.Contains(consultPrompt, "SECRET CIPHER TEXT") {
+		t.Error("consult leaked another region's reference")
+	}
+
+	// The consulted reply, not the preliminary one, is the proposal.
+	props, _ := db.ListProposals(ctx, res.AttemptID)
+	if len(props) != 2 {
+		t.Fatalf("proposals: %+v", props)
+	}
+	if props[0].Author != "logographer:king-a" || props[0].Prose != "Unrest spreads." {
+		t.Errorf("consulted reply not recorded as proposal: %+v", props[0])
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Regions["king-a"].Attrs["unrest"] != "high" {
+		t.Error("consulted proposal not committed")
+	}
+}
+
+func TestConsultWithoutUsableIDsCostsNoCall(t *testing.T) {
+	db, ctx := setup(t)
+	kingGuess := `{"prose":"Something about old laws.","events":[],"memory":{"summary":"A fragile monarchy."},"consult":["ref-777777","ref-888888"]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingGuess},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchAccept},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	if len(fake.Calls()) != 3 {
+		t.Errorf("unknown consult ids must not spend a call: %d calls", len(fake.Calls()))
+	}
+}
+
 func TestVisibilitySeparation(t *testing.T) {
 	db, ctx := setup(t)
 	fake := &inference.Scripted{Replies: []inference.Reply{

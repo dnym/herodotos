@@ -103,6 +103,16 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 // UnknownRegionError names a missing region.
 type UnknownRegionError struct{ ID domain.ID }
 
+// VisibleReferences lists every reference document the region may see,
+// which is exactly the set a reply may consult.
+func VisibleReferences(v *LogographerView) []domain.ReferenceDoc {
+	var out []domain.ReferenceDoc
+	out = append(out, v.Bindings...)
+	out = append(out, v.Retrieved...)
+	out = append(out, v.Catalog...)
+	return out
+}
+
 // classifyReferences splits the region-visible references into the
 // three prompt tiers of the skill paradigm: binding documents always
 // appear in full; advisory documents whose keywords match what the

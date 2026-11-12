@@ -116,3 +116,29 @@ func TestRenderPromptsContainOwnConditionsOnly(t *testing.T) {
 		t.Fatal("neighbour identity should be listed by id only")
 	}
 }
+
+func TestConsultDocsResolution(t *testing.T) {
+	visible := []domain.ReferenceDoc{
+		{ID: "ref-a", Scope: "world", Title: "A"},
+		{ID: "ref-b", Scope: "world", Title: "B"},
+		{ID: "ref-c", Scope: "region", RegionID: "king-a", Title: "C"},
+		{ID: "ref-d", Scope: "region", RegionID: "king-a", Title: "D"},
+	}
+	got := ConsultDocs([]string{"ref-c", "ref-zzz", "ref-c", "ref-a", "ref-b", "ref-d"}, visible)
+	if len(got) != 3 {
+		t.Fatalf("cap: %+v", got)
+	}
+	want := []domain.ID{"ref-c", "ref-a", "ref-b"}
+	for i := range got {
+		if got[i].ID != want[i] {
+			t.Errorf("order/dedupe: %+v", got)
+			break
+		}
+	}
+	if len(ConsultDocs([]string{"nope"}, visible)) != 0 {
+		t.Error("unknown ids must resolve to nothing")
+	}
+	if section := RenderConsultSection(got); !strings.Contains(section, "REFERENCE DOCUMENTS YOU REQUESTED") {
+		t.Errorf("consult section missing: %q", section)
+	}
+}

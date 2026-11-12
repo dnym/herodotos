@@ -137,6 +137,18 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		if err != nil {
 			return fail(fmt.Sprintf("region %s proposal failed", regionID), err)
 		}
+		// Skill-style progressive disclosure: if the historian asked
+		// for cataloged documents, spend exactly one follow-up call
+		// with their texts in context. A failed consult costs a call
+		// but never the step; the first reply stands and there is no
+		// second consult round.
+		if len(reply.Consult) > 0 && st.used < b.MaxModelCallsPerStep {
+			if docs := agents.ConsultDocs(reply.Consult, knowledge.VisibleReferences(view)); len(docs) > 0 {
+				if consulted, cerr := st.askConsult(ctx, regionID, view, docs); cerr == nil {
+					reply = consulted
+				}
+			}
+		}
 		author := "logographer:" + regionID
 		if len(reply.Events) > 0 {
 			proposals[author] = append(proposals[author], reply.Events...)
@@ -369,6 +381,36 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 	}
 	var reply *agents.LogographerReply
 	err := retryParse(s, ctx, "logographer:"+regionID, agents.SystemLogographer(), prompt, 0.8, s.b.MaxOutputTokens,
+		func(text string) error {
+			r, err := agents.ParseLogographerReply(text)
+			if err != nil {
+				return err
+			}
+			for i := range r.Events {
+				if err := s.pv.ValidateLogographerProposal(regionID, &r.Events[i]); err != nil {
+					return err
+				}
+			}
+			for _, bl := range r.Beliefs {
+				if bl.SubjectID != "" && s.snap.Entities[bl.SubjectID] == nil {
+					return fmt.Errorf("belief subject %q is not a known entity", bl.SubjectID)
+				}
+			}
+			reply = r
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return reply, nil
+}
+
+func (s *stepRun) askConsult(ctx context.Context, regionID string, view *knowledge.LogographerView, docs []domain.ReferenceDoc) (*agents.LogographerReply, error) {
+	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view, s.b.MaxPromptBytes)
+	prompt += agents.RenderConsultSection(docs) +
+		"\nThese are the reference documents you asked for. Give your final answer now in the same JSON format; no further documents are available this step.\n"
+	var reply *agents.LogographerReply
+	err := retryParse(s, ctx, "logographer:"+regionID+":consult", agents.SystemLogographer(), prompt, 0.8, s.b.MaxOutputTokens,
 		func(text string) error {
 			r, err := agents.ParseLogographerReply(text)
 			if err != nil {

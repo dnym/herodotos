@@ -46,6 +46,9 @@ type LogographerReply struct {
 	Events  []domain.PropEvent `json:"events"`
 	Memory  *MemoryUpdate      `json:"memory,omitempty"`
 	Beliefs []BeliefRecord     `json:"beliefs,omitempty"`
+	// Consult requests the full text of up to 3 cataloged reference
+	// documents; the engine answers with one bounded follow-up call.
+	Consult []string `json:"consult,omitempty"`
 }
 
 // OrchestratorReply is a parsed adjudication reply.
@@ -262,6 +265,51 @@ func refBody(ref domain.ReferenceDoc) string {
 		body = body[:1200] + "...[truncated]"
 	}
 	return body
+}
+
+// maxConsultDocs bounds one consult round: enough to ground a reply,
+// small enough that the follow-up prompt stays inside its budget.
+const maxConsultDocs = 3
+
+// ConsultDocs resolves requested reference ids against the documents
+// visible to the region. Unknown ids, duplicates, and everything past
+// the cap are dropped rather than rejected: a bad guess costs nothing.
+func ConsultDocs(requested []string, visible []domain.ReferenceDoc) []domain.ReferenceDoc {
+	seen := map[string]bool{}
+	var out []domain.ReferenceDoc
+	for _, id := range requested {
+		if len(out) >= maxConsultDocs {
+			break
+		}
+		if seen[id] {
+			continue
+		}
+		for _, doc := range visible {
+			if string(doc.ID) == id {
+				seen[id] = true
+				out = append(out, doc)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// RenderConsultSection appends the full texts of consulted documents to
+// a follow-up prompt. Requested bodies get a larger cap than automatic
+// ones: the agent asked for exactly this text.
+func RenderConsultSection(docs []domain.ReferenceDoc) string {
+	var b strings.Builder
+	writeSection(&b, "REFERENCE DOCUMENTS YOU REQUESTED (full text)", func() {
+		for _, ref := range docs {
+			body := strings.TrimSpace(ref.Body)
+			if len(body) > 4000 {
+				body = body[:4000] + "...[truncated]"
+			}
+			fmt.Fprintf(&b, "- %s (%s): %s\n%s\n", ref.ID, ref.Scope, ref.Title, body)
+		}
+	})
+	return b.String()
 }
 
 // RenderOrchestratorPrompt builds the adjudication context: everything,

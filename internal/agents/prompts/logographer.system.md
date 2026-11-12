@@ -28,7 +28,8 @@ Reply with ONE JSON object and nothing else:
     {"subject_id": "<entity id from your context, or omit for a general belief>",
      "modality": "known | uncertain | mistaken",
      "statement": "<what people in your region believe; may be wrong>"}
-  ]
+  ],
+  "consult": ["<optional: up to 3 cataloged ref-... ids whose full text you need>"]
 }
 
 Hard rules:
@@ -64,4 +65,9 @@ Hard rules:
   contradict them. Advisory documents (loaded in full when they match
   your current situation, otherwise listed by description only) keep
   you grounded: stay consistent with what they state.
+- If a cataloged reference document matters to this step but its full
+  text is not loaded, put up to 3 of those ids in "consult": the engine
+  will ask you once more with those texts in full, and that follow-up
+  answer is your final proposal for the step. Do not use "consult" when
+  answering the orchestrator's reaction questions.
 - You may never change directives.
