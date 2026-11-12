@@ -25,7 +25,23 @@ type Snapshot struct {
 }
 
 // LoadSnapshot reads the committed state at the current clock step.
+// Reports appear once their earliest delivery step has passed; no
+// in-flight attempt can make them visible early.
 func (d *DB) LoadSnapshot(ctx context.Context) (*Snapshot, error) {
+	return d.loadSnapshot(ctx, 0)
+}
+
+// LoadSnapshotForAttempt reads the same state but applies the report
+// deliveries due at the start of the given step: agents working on that
+// step must see news arriving with it. The marking itself is only
+// durable when the step commits (CommitStep), so a failed attempt
+// leaves no trace and every retry of the same step sees identical
+// knowledge.
+func (d *DB) LoadSnapshotForAttempt(ctx context.Context, step int) (*Snapshot, error) {
+	return d.loadSnapshot(ctx, step)
+}
+
+func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, error) {
 	meta, err := d.GetMeta(ctx)
 	if err != nil {
 		return nil, err
@@ -141,9 +157,17 @@ func (d *DB) LoadSnapshot(ctx context.Context) (*Snapshot, error) {
 	}
 	rows.Close()
 
+	horizon := meta.ClockStep
+	if attemptStep > horizon {
+		horizon = attemptStep
+	}
 	rows, err = d.sqlDB.QueryContext(ctx,
-		`SELECT id, event_id, target_region_id, earliest_step, COALESCE(delivered_step,0)
-		 FROM reports WHERE delivered_step IS NOT NULL ORDER BY delivered_step, id`)
+		`SELECT id, event_id, target_region_id, earliest_step,
+		        COALESCE(delivered_step, ?)
+		 FROM reports
+		 WHERE delivered_step IS NOT NULL OR earliest_step <= ?
+		 ORDER BY COALESCE(delivered_step, ?), id`,
+		horizon, horizon, horizon)
 	if err != nil {
 		return nil, err
 	}
@@ -216,10 +240,12 @@ func (d *DB) LoadSnapshot(ctx context.Context) (*Snapshot, error) {
 	return s, nil
 }
 
-// BeginAttempt creates the diagnostics row for a new step attempt and
-// processes report deliveries at this boundary. Delivery marking is
-// durable even if the attempt later fails, so delivered news never
-// disappears between retries.
+// BeginAttempt creates the diagnostics row for a new step attempt.
+// Report deliveries are deliberately not marked here: delivery markers
+// are written by CommitStep in the step's transaction, so a failed
+// attempt leaves report rows untouched and every retry of the same
+// step sees identical report eligibility (eligibility itself is purely
+// time-based, computed in LoadSnapshot).
 func (d *DB) BeginAttempt(ctx context.Context, step int) (string, error) {
 	tx, err := d.Begin(ctx)
 	if err != nil {
@@ -234,11 +260,6 @@ func (d *DB) BeginAttempt(ctx context.Context, step int) (string, error) {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO attempts(id, step, status, started_utc) VALUES (?, ?, 'running', ?)`,
 		id, step, utcNow()); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE reports SET delivered_step = ? WHERE delivered_step IS NULL AND earliest_step <= ?`,
-		step, step); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {

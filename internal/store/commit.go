@@ -111,6 +111,15 @@ func (d *DB) CommitStep(ctx context.Context, plan CommitPlan) ([]string, error) 
 		}
 	}
 
+	// Durably mark reports this step delivers. Reports created in this
+	// same plan always require EarliestStep > step (checked above), so
+	// they are never marked here.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE reports SET delivered_step = ? WHERE delivered_step IS NULL AND earliest_step <= ?`,
+		step, step); err != nil {
+		return nil, fmt.Errorf("report delivery: %w", err)
+	}
+
 	for _, mem := range plan.Memories {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO memories(region_id, summary, open_threads, updated_step) VALUES (?, ?, ?, ?)

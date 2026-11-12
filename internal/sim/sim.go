@@ -93,7 +93,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		return nil, fmt.Errorf("begin attempt: %w", err)
 	}
 
-	snap, err := e.DB.LoadSnapshot(ctx)
+	snap, err := e.DB.LoadSnapshotForAttempt(ctx, newStep)
 	if err != nil {
 		e.DB.MarkAttemptFailed(context.WithoutCancel(ctx), attemptID, "snapshot failed")
 		return nil, fmt.Errorf("snapshot: %w", err)

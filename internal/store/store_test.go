@@ -133,9 +133,45 @@ func TestHappyCommitAndReopen(t *testing.T) {
 		t.Fatal("memory not persisted")
 	}
 
-	// Report becomes available at its earliest step.
+	// A failed attempt at step 3 must leave report rows untouched and
+	// must not change what the next attempt can see.
 	if _, err := d2.BeginAttempt(ctx, 3); err != nil {
 		t.Fatal(err)
+	}
+	reportRows, err := d2.ListReports(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reportRows) != 1 || reportRows[0].Report.DeliveredStep != 0 {
+		t.Fatalf("failed attempt marked a delivery: %+v", reportRows)
+	}
+	snap, err = d2.LoadSnapshotForAttempt(ctx, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.DeliveredReports["prin-b"]) != 1 {
+		t.Fatalf("attempt view must include news due at its own step: %v", snap.DeliveredReports)
+	}
+	// Plain snapshots at the committed clock still hide it.
+	if snap, err = d2.LoadSnapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.DeliveredReports["prin-b"]) != 0 {
+		t.Fatalf("undelivered report leaked to clock view: %v", snap.DeliveredReports)
+	}
+
+	// Commit the quiet steps 2 and 3; the step-3 commit marks delivery
+	// durably, and LoadSnapshot then shows it.
+	for step := 2; step <= 3; step++ {
+		att, err := d2.BeginAttempt(ctx, step)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", step, err)
+		}
+		if _, err := d2.CommitStep(ctx, CommitPlan{
+			AttemptID: att, BaseRevision: int64(step - 1), Summary: "quiet",
+		}); err != nil {
+			t.Fatalf("commit %d: %v", step, err)
+		}
 	}
 	snap, err = d2.LoadSnapshot(ctx)
 	if err != nil {
@@ -143,6 +179,13 @@ func TestHappyCommitAndReopen(t *testing.T) {
 	}
 	if len(snap.DeliveredReports["prin-b"]) != 1 {
 		t.Fatalf("report not delivered at step 3: %v", snap.DeliveredReports)
+	}
+	rows, err := d2.ListReports(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Report.DeliveredStep != 3 {
+		t.Fatalf("delivery not marked by the step commit: %+v", rows)
 	}
 }
 
