@@ -106,8 +106,10 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 	}
 
 	st := &stepRun{e: e, b: b, attempt: attemptID, snap: snap, pv: agents.ProposalValidator{
-		Snap: snap, CurrentStep: currentStep,
+		Snap: snap, CurrentStep: currentStep, DB: e.DB, AllEvents: true,
 	}}
+	st.viewPV = st.pv
+	st.viewPV.AllEvents = false
 
 	proposals := map[string][]domain.PropEvent{}
 	memories := map[string]*agents.MemoryUpdate{}
@@ -398,8 +400,13 @@ type stepRun struct {
 	b       config.Budgets
 	attempt string
 	snap    *store.Snapshot
-	pv      agents.ProposalValidator
-	used    int
+	// pv adjudicates with full canonical history; viewPV validates a
+	// regional agent's proposals with only that region's knowledge.
+	// One agent's private information must never validate another's
+	// reach, so the two must stay separate.
+	pv     agents.ProposalValidator
+	viewPV agents.ProposalValidator
+	used   int
 }
 
 func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *knowledge.LogographerView, extra string, premise []domain.Event) (*agents.LogographerReply, error) {
@@ -422,7 +429,7 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 				return err
 			}
 			for i := range r.Events {
-				if err := s.pv.ValidateLogographerProposal(regionID, &r.Events[i]); err != nil {
+				if err := s.viewPV.ValidateLogographerProposal(regionID, &r.Events[i]); err != nil {
 					return err
 				}
 			}
@@ -452,7 +459,7 @@ func (s *stepRun) askConsult(ctx context.Context, regionID string, view *knowled
 				return err
 			}
 			for i := range r.Events {
-				if err := s.pv.ValidateLogographerProposal(regionID, &r.Events[i]); err != nil {
+				if err := s.viewPV.ValidateLogographerProposal(regionID, &r.Events[i]); err != nil {
 					return err
 				}
 			}

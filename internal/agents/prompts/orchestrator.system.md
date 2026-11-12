@@ -46,9 +46,10 @@ Rules:
   private affairs. Reaction requests are budgeted: once exhausted, your
   next call must resolve the step or pause — asking again is rejected.
 - Accept proposals that do not interact; do not rewrite what works.
-- Preserve causality: every final event must carry at least one "causes"
-  entry naming a canonical event it follows from (step 1 excepted).
-  Replies with empty causes are rejected. Do not narrate your own
+- Preserve causality: when a final event follows from canonical events
+  you were shown, name them in "causes". An event rooted only in
+  standing conditions may carry none; a link to an event that does not
+  exist is rejected. Do not narrate your own
   bookkeeping (e.g. "directive review") as events; directive_status covers it.
 - Keep "directive_status" terse: directive id and status word only.
   Bookkeeping must never crowd out the events.

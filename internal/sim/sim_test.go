@@ -217,7 +217,7 @@ func TestFullStepCommitsOneSharedHistory(t *testing.T) {
 	}
 }
 
-func TestFinalEventRequiresCausesAfterFirstStep(t *testing.T) {
+func TestFinalEventInventedCauseCorrected(t *testing.T) {
 	db, ctx := setup(t)
 	step1 := &inference.Scripted{Replies: []inference.Reply{
 		{Role: "logographer:king-a", Text: kingReply},
@@ -229,23 +229,23 @@ func TestFinalEventRequiresCausesAfterFirstStep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	noCause := `{"notes":"linked","events":[{"origin":"prin-b","type":"development","title":"Mustering","prose":"Drums on the border.","changes":[]}]}`
-	withCause := `{"notes":"linked","events":[{"origin":"prin-b","type":"development","title":"Mustering","prose":"Drums on the border.","changes":[],"causes":["evt-000001"]}]}`
+	fake := `{"notes":"linked","events":[{"origin":"prin-b","type":"development","title":"Mustering","prose":"Drums on the border.","changes":[],"causes":["evt-999999"]}]}`
+	trueCause := `{"notes":"linked","events":[{"origin":"prin-b","type":"development","title":"Mustering","prose":"Drums on the border.","changes":[],"causes":["evt-000001"]}]}`
 	step2 := &inference.Scripted{Replies: []inference.Reply{
 		{Role: "logographer:king-a", Text: prinQuiet},
 		{Role: "logographer:prin-b", Text: prinQuiet},
-		{Role: "orchestrator", Text: noCause},
-		{Role: "orchestrator", Text: withCause},
+		{Role: "orchestrator", Text: fake},
+		{Role: "orchestrator", Text: trueCause},
 	}}
 	e2 := &Engine{DB: db, Client: step2, ModelName: "fake"}
 	if _, err := e2.RunStep(ctx); err != nil {
-		t.Fatalf("empty causes should have been corrected, not fatal: %v", err)
+		t.Fatalf("invented cause should have been corrected, not fatal: %v", err)
 	}
 	calls := step2.Calls()
 	if len(calls) != 4 {
 		t.Fatalf("want 4 calls, got %d", len(calls))
 	}
-	if !strings.Contains(calls[3].Prompt, "cites no causes") {
+	if !strings.Contains(calls[3].Prompt, "unknown cause") {
 		t.Fatal("causality correction missing from prompt")
 	}
 	events, _ := db.ListEvents(ctx, store.EventQuery{})
@@ -634,6 +634,45 @@ func TestZeroReactionBudgetRejectsAnyRequest(t *testing.T) {
 	snap, _ := db.LoadSnapshot(ctx)
 	if snap.Meta.ClockStep != 0 {
 		t.Fatalf("failed attempt advanced the clock: %d", snap.Meta.ClockStep)
+	}
+}
+
+func TestUndeliveredEventIsNoCauseForOtherRegion(t *testing.T) {
+	db, ctx := setup(t)
+	// Step 1: king-a's event reaches prin-b only at step 3.
+	if _, err := (&Engine{DB: db, Client: &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchAccept},
+	}}}).RunStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Step 2: prin-b cites that event although its report has not
+	// arrived. Existence is not access: the citation must be rejected
+	// in-turn and the attempt must not commit it.
+	leak := `{"prose":"Reacting to riots.","events":[{"type":"development","title":"Prin-b seals the border","prose":"Troops close the passes.","causes":["evt-000001"],"changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"border":"sealed"}}]}],"memory":{"summary":"Sealing the border."}}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: leak},
+		{Role: "logographer:prin-b", Text: leak},
+		{Role: "logographer:prin-b", Text: leak},
+	}}
+	_, err := (&Engine{DB: db, Client: fake, ModelName: "fake"}).RunStep(ctx)
+	if err == nil {
+		t.Fatal("cause on undelivered news committed as success")
+	}
+	if !strings.Contains(err.Error(), "not in your knowledge") {
+		t.Errorf("failure must name the knowledge boundary: %v", err)
+	}
+	if !strings.Contains(fake.Calls()[2].Prompt, "not in your knowledge") {
+		t.Error("correction retry must teach the knowledge boundary")
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Meta.ClockStep != 1 {
+		t.Fatalf("failed attempt advanced the clock: %d", snap.Meta.ClockStep)
+	}
+	if snap.Regions["prin-b"].Attrs["border"] != nil {
+		t.Fatal("failed attempt changed canonical state")
 	}
 }
 

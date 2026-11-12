@@ -1,7 +1,9 @@
 package agents
 
 import (
+	"context"
 	"math/rand"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -332,4 +334,121 @@ func TestReactionPremiseVisibility(t *testing.T) {
 	if err := pv.ValidateReaction("nowhere", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000001"}}); err == nil {
 		t.Error("unknown reaction target accepted")
 	}
+}
+
+func TestLateReportRevivesOldEventAsCause(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "world.db")
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	var w store.WorldSpec
+	w.Name = "T"
+	w.StartDate = "1000-06-01"
+	w.StepDays = 7
+	w.Regions = []struct {
+		ID    domain.ID      `json:"id"`
+		Name  string         `json:"name"`
+		Attrs map[string]any `json:"attrs,omitempty"`
+	}{{ID: "king-a", Name: "Kingdom A"}, {ID: "prin-b", Name: "Principality B"}}
+	if err := db.InitWorld(ctx, &w); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	att, err := db.BeginAttempt(ctx, 1)
+	if err != nil {
+		t.Fatalf("attempt: %v", err)
+	}
+	if _, err := db.CommitStep(ctx, store.CommitPlan{
+		AttemptID: att, BaseRevision: 0, Summary: "s1",
+		Events: []store.CommittedEvent{{
+			Type: "development", Title: "Ford closed", Prose: "Garrisons bar the crossing.",
+			RegionIDs: []domain.ID{"prin-b"},
+		}},
+		Reports: []store.ReportPlan{{EventIndex: 0, TargetRegion: "king-a", EarliestStep: 10}},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	// The clock is far past the event: it has left the recent window
+	// (last 8 steps) and only reaches king-a through the late report.
+	for step := 2; step <= 10; step++ {
+		att, err := db.BeginAttempt(ctx, step)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", step, err)
+		}
+		if _, err := db.CommitStep(ctx, store.CommitPlan{
+			AttemptID: att, BaseRevision: int64(step - 1), Summary: "quiet",
+		}); err != nil {
+			t.Fatalf("commit %d: %v", step, err)
+		}
+	}
+	snap, err := db.LoadSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	for _, ev := range snap.RecentEvents {
+		if ev.ID == "evt-000001" {
+			t.Fatal("fixture broken: event still in recent window")
+		}
+	}
+	var delivered bool
+	for _, rep := range snap.DeliveredReports["king-a"] {
+		if rep.EventID == "evt-000001" {
+			delivered = true
+		}
+	}
+	if !delivered {
+		t.Fatal("late report not in snapshot knowledge")
+	}
+
+	pv := &ProposalValidator{Snap: snap, CurrentStep: 10, DB: db}
+	if !pv.causeVisibleTo("king-a", "evt-000001") {
+		t.Error("event delivered by late report must be citable by king-a")
+	}
+	if pv.causeVisibleTo("prin-b", "evt-000001") {
+		// prin-b was not the scene region in the recent window here; the
+		// fixture marks only king-a as the report target.
+		if !snapHasRegionEvent(snap, "prin-b", "evt-000001") {
+			t.Error("scene region should still know its own old event")
+		}
+	}
+	if !pv.CanObserveEvent("king-a", "evt-000001") {
+		t.Error("reaction premise on a late-reported event must validate")
+	}
+	// A cause outside the region's knowledge stays rejected even though
+	// it canonically exists: existence and access are separate.
+	bad := &domain.PropEvent{
+		Type: "development", Title: "t", Prose: "p",
+		Causes: []domain.ID{"evt-999999"},
+	}
+	if err := pv.ValidateLogographerProposal("king-a", bad); err == nil {
+		t.Error("invented cause accepted")
+	}
+	orch := &ProposalValidator{Snap: snap, CurrentStep: 10, DB: db, AllEvents: true}
+	fin := &domain.PropEvent{
+		Type: "development", Title: "t", Prose: "p",
+		Causes: []domain.ID{"evt-000001"},
+	}
+	if err := orch.ValidateFinalEvent(fin); err != nil {
+		t.Errorf("orchestrator must cite old canonical events: %v", err)
+	}
+	inven := *fin
+	inven.Causes = []domain.ID{"evt-999999"}
+	if err := orch.ValidateFinalEvent(&inven); err == nil {
+		t.Error("invented cause accepted by orchestrator")
+	}
+}
+
+func snapHasRegionEvent(s *store.Snapshot, region string, id domain.ID) bool {
+	for _, ev := range s.RecentEvents {
+		if ev.ID == id {
+			for _, r := range ev.RegionIDs {
+				if r == domain.ID(region) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

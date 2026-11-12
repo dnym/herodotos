@@ -3,6 +3,7 @@
 package agents
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -490,6 +491,13 @@ func jsonCompact(v any) string {
 type ProposalValidator struct {
 	Snap        *store.Snapshot
 	CurrentStep int // committed clock; commitment will produce CurrentStep+1
+	// DB resolves existence of ids beyond the snapshot's recent-event
+	// window (older causes surfacing via late reports). Nil in unit
+	// tests, which then fall back to the recent window.
+	DB *store.DB
+	// AllEvents marks a validator that sees full canonical history
+	// (the orchestrator) rather than one region's view.
+	AllEvents bool
 }
 
 // checkStatusValue rejects set_status values outside the lifecycle
@@ -575,8 +583,8 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 		}
 	}
 	for _, id := range ev.Causes {
-		if !knownCause(pv.Snap, id) {
-			return fmt.Errorf("unknown cause %q", id)
+		if !pv.causeVisibleTo(authorRegion, id) {
+			return fmt.Errorf("cause %q is not in your knowledge: cite events from your own history or reports delivered to you", id)
 		}
 	}
 	for region, step := range ev.Delivery {
@@ -655,15 +663,14 @@ func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 		}
 	}
 	for _, id := range ev.Causes {
-		if !knownCause(pv.Snap, id) {
+		if !pv.causeExists(id) {
 			return fmt.Errorf("unknown cause %q", id)
 		}
 	}
-	// Once canonical history is visible, every orchestrator event must
-	// be placed on the causal graph: it follows from something shown.
-	if len(pv.Snap.RecentEvents) > 0 && len(ev.Causes) == 0 {
-		return fmt.Errorf("event %q cites no causes: name at least one visible canonical event id in \"causes\" that it follows from", ev.Title)
-	}
+	// Causal edges are required when they exist, not as a formality:
+	// a development rooted in ongoing conditions or initial states may
+	// legitimately carry none. Invented links are rejected by the
+	// existence check above.
 	for region, step := range ev.Delivery {
 		if _, ok := pv.Snap.Regions[region]; !ok {
 			return fmt.Errorf("delivery to unknown region %q", region)
@@ -678,6 +685,57 @@ func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 func knownCause(s *store.Snapshot, id domain.ID) bool {
 	for _, ev := range s.RecentEvents {
 		if ev.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// causeExists checks canonical existence, beyond the snapshot's recent
+// window when a DB is available: an event surfacing only through a
+// late report is still real history.
+func (pv *ProposalValidator) causeExists(id domain.ID) bool {
+	if knownCause(pv.Snap, id) {
+		return true
+	}
+	if pv.DB == nil {
+		return false
+	}
+	_, err := pv.DB.GetEvent(context.Background(), id)
+	return err == nil
+}
+
+// causeVisibleTo separates access from existence: a regional agent may
+// cite causes it could actually know — events in its own recent
+// history, or events delivered to it by report, whenever the report
+// surfaced them.
+func (pv *ProposalValidator) causeVisibleTo(regionID domain.ID, id domain.ID) bool {
+	if pv.AllEvents {
+		return pv.causeExists(id)
+	}
+	inRecent := false
+	for _, ev := range pv.Snap.RecentEvents {
+		if ev.ID != id {
+			continue
+		}
+		inRecent = true
+		break
+	}
+	if inRecent {
+		return pv.CanObserveEvent(regionID, id)
+	}
+	// Outside the recent window the snapshot no longer lists the
+	// event: only a report delivered to this region can make it
+	// knowable.
+	if pv.DB == nil {
+		return false
+	}
+	ev, err := pv.DB.GetEvent(context.Background(), id)
+	if err != nil {
+		return false
+	}
+	for _, rep := range pv.Snap.DeliveredReports[regionID] {
+		if rep.EventID == ev.ID {
 			return true
 		}
 	}
@@ -705,6 +763,15 @@ func (pv *ProposalValidator) CanObserveEvent(regionID domain.ID, eventID domain.
 			}
 		}
 		return false
+	}
+	if pv.DB != nil {
+		// Older events leave the recent window but stay knowable
+		// through delivered reports.
+		for _, rep := range pv.Snap.DeliveredReports[regionID] {
+			if rep.EventID == eventID {
+				return true
+			}
+		}
 	}
 	return false
 }

@@ -12,7 +12,8 @@ Reply with ONE JSON object and nothing else:
       "type": "development | interaction | conflict",
       "title": "<short>",
       "prose": "<what happens and why it plausibly follows from shown conditions>",
-      "causes": ["evt-... ids known to you"],
+      "causes": ["evt-... from your own history or delivered reports;
+                 empty when the event follows only standing conditions"],
       "changes": [
         {"object": "region | entity | relationship",
          "object_id": "...",
