@@ -102,6 +102,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /{$}", s.pageOverview)
 	mux.HandleFunc("GET /events", s.pageEvents)
 	mux.HandleFunc("GET /event", s.pageEvent)
+	mux.HandleFunc("GET /entity", s.pageEntity)
+	mux.HandleFunc("GET /region", s.pageRegion)
 	mux.HandleFunc("GET /attempts", s.pageAttempts)
 	mux.HandleFunc("GET /attempt", s.pageAttempt)
 	mux.HandleFunc("GET /run/panel", s.partialRunPanel)
@@ -524,6 +526,9 @@ func (s *Server) render(w http.ResponseWriter, page, title string, r *http.Reque
 	if page == "event" {
 		section = "events"
 	}
+	if page == "entity" || page == "region" {
+		section = "overview"
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.ExecuteTemplate(w, page+".tmpl", pageData{
 		Title: title, Section: section, Flash: flash, FlashErr: flashErr, Inner: inner,
@@ -702,6 +707,244 @@ func regionNames(ctx context.Context, db *store.DB) map[domain.ID]string {
 		}
 	}
 	return out
+}
+
+// --- read-only detail pages -------------------------------------------------
+// These pages exist for inspection while evaluating a run: canonical
+// attributes, memories, and beliefs, with the links to follow between
+// them. They render committed state only and never write.
+
+type entityData struct {
+	Entity      domain.Entity
+	RegionID    domain.ID
+	RegionName  string
+	Attrs       []string
+	RelRows     []relationshipRow
+	BeliefRows  []beliefRow
+	EventRows   []eventRow
+	EntityNames map[domain.ID]string
+}
+
+type relationshipRow struct {
+	Rel       domain.Relationship
+	Other     domain.ID
+	Dir       string // "from" this entity, or "to" it
+	OtherName string
+}
+
+type beliefRow struct {
+	Belief      domain.Belief
+	RegionName  string
+	SubjectName string
+}
+
+func (s *Server) pageEntity(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if !domain.ValidID(id) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	ctx := r.Context()
+	snap, err := s.DB.LoadSnapshot(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	ent := snap.Entities[domain.ID(id)]
+	if ent == nil {
+		http.Error(w, "no such entity", http.StatusNotFound)
+		return
+	}
+	d := entityData{
+		Entity: *ent, Attrs: attrLines(ent.Attrs),
+		EntityNames: entityNames(snap),
+	}
+	if rg := snap.Regions[ent.RegionID]; rg != nil {
+		d.RegionID, d.RegionName = rg.ID, rg.Name
+	}
+	for _, rel := range snap.Relationships {
+		var other domain.ID
+		var dir string
+		if rel.SourceID == ent.ID {
+			other, dir = rel.TargetID, "from"
+		} else if rel.TargetID == ent.ID {
+			other, dir = rel.SourceID, "to"
+		} else {
+			continue
+		}
+		d.RelRows = append(d.RelRows, relationshipRow{
+			Rel: *rel, Other: other, Dir: dir, OtherName: d.EntityNames[other],
+		})
+	}
+	sort.Slice(d.RelRows, func(i, j int) bool { return d.RelRows[i].Rel.ID < d.RelRows[j].Rel.ID })
+	d.BeliefRows = beliefsAbout(snap, ent.ID)
+	events, err := s.DB.ListEvents(ctx, store.EventQuery{Limit: 1 << 30})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, ev := range events { // newest first, as listed
+		for _, eid := range ev.EntityIDs {
+			if eid == ent.ID {
+				d.EventRows = append(d.EventRows, eventRow{
+					Event: ev, Regions: ev.RegionIDs, Entities: ev.EntityIDs, Causes: ev.CauseIDs,
+				})
+				break
+			}
+		}
+	}
+	s.render(w, "entity", ent.Name, r, d)
+}
+
+func entityNames(snap *store.Snapshot) map[domain.ID]string {
+	out := map[domain.ID]string{}
+	for id, e := range snap.Entities {
+		out[id] = e.Name
+	}
+	return out
+}
+
+// beliefsAbout lists region-level beliefs concerning one entity, in a
+// stable order.
+func beliefsAbout(snap *store.Snapshot, subject domain.ID) []beliefRow {
+	var out []beliefRow
+	for _, regionID := range sortedIDKeys(snap.Beliefs) {
+		for _, bl := range snap.Beliefs[regionID] {
+			if bl.SubjectID != subject {
+				continue
+			}
+			row := beliefRow{Belief: bl}
+			if rg := snap.Regions[regionID]; rg != nil {
+				row.RegionName = rg.Name
+			}
+			if e := snap.Entities[bl.SubjectID]; e != nil {
+				row.SubjectName = e.Name
+			}
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func sortedIDKeys[V any](m map[domain.ID]V) []domain.ID {
+	keys := make([]domain.ID, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+type regionData struct {
+	Region       domain.Region
+	ClockStep    int
+	Date         string
+	Attrs        []string
+	Memory       *domain.Memory
+	NeighborRows []neighborRow
+	Entities     []*domain.Entity
+	BeliefRows   []beliefRow
+	ReportRows   []store.ReportRow
+	EventRows    []eventRow
+	Directives   []domain.Directive
+	EntityNames  map[domain.ID]string
+}
+
+type neighborRow struct {
+	ID     domain.ID
+	Name   string
+	Status string
+}
+
+func (s *Server) pageRegion(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if !domain.ValidID(id) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	ctx := r.Context()
+	snap, err := s.DB.LoadSnapshot(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	rg := snap.Regions[domain.ID(id)]
+	if rg == nil {
+		http.Error(w, "no such region", http.StatusNotFound)
+		return
+	}
+	d := regionData{
+		Region: *rg, ClockStep: snap.Meta.ClockStep,
+		Date:  stepDate(snap.Meta, snap.Meta.ClockStep),
+		Attrs: attrLines(rg.Attrs), Memory: snap.Memories[rg.ID],
+		EntityNames: entityNames(snap),
+	}
+	for _, c := range snap.Connections {
+		other := c.A
+		if other == rg.ID {
+			other = c.B
+		}
+		if other == rg.ID {
+			continue
+		}
+		n := neighborRow{ID: other}
+		if r2 := snap.Regions[other]; r2 != nil {
+			n.Name, n.Status = r2.Name, r2.Status
+		}
+		d.NeighborRows = append(d.NeighborRows, n)
+	}
+	sort.Slice(d.NeighborRows, func(i, j int) bool { return d.NeighborRows[i].ID < d.NeighborRows[j].ID })
+	for _, eid := range sortedIDKeys(snap.Entities) {
+		if e := snap.Entities[eid]; e.RegionID == rg.ID {
+			d.Entities = append(d.Entities, e)
+		}
+	}
+	for _, regionID := range sortedIDKeys(snap.Beliefs) {
+		if regionID != rg.ID {
+			continue
+		}
+		for _, bl := range snap.Beliefs[regionID] {
+			row := beliefRow{Belief: bl, RegionName: rg.Name}
+			if e := snap.Entities[bl.SubjectID]; e != nil {
+				row.SubjectName = e.Name
+			}
+			d.BeliefRows = append(d.BeliefRows, row)
+		}
+	}
+	for _, rep := range snap.DeliveredReports[rg.ID] {
+		row := store.ReportRow{Report: rep}
+		if ev := findEvent(snap, rep.EventID); ev != nil {
+			row.EventTitle = ev.Title
+		} else if ev, err := s.DB.GetEvent(ctx, rep.EventID); err == nil {
+			row.EventTitle = ev.Title
+		} else {
+			row.EventTitle = string(rep.EventID)
+		}
+		d.ReportRows = append(d.ReportRows, row)
+	}
+	events, err := s.DB.ListEvents(ctx, store.EventQuery{RegionID: string(rg.ID), Limit: 1 << 30})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, ev := range events {
+		d.EventRows = append(d.EventRows, eventRow{
+			Event: ev, Regions: ev.RegionIDs, Entities: ev.EntityIDs, Causes: ev.CauseIDs,
+		})
+	}
+	for _, id := range sortedIDKeys(snap.Directives) {
+		d.Directives = append(d.Directives, *snap.Directives[id])
+	}
+	s.render(w, "region", rg.Name, r, d)
+}
+
+func findEvent(snap *store.Snapshot, id domain.ID) *domain.Event {
+	for _, ev := range snap.RecentEvents {
+		if ev.ID == id {
+			return &ev
+		}
+	}
+	return nil
 }
 
 type attemptsData struct {

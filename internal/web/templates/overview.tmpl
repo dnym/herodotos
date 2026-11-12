@@ -23,7 +23,7 @@
     {{range $id, $r := $d.Snap.Regions}}
     <tr>
       <td><a class="chip" href="/events?region={{$id}}">{{$id}}</a></td>
-      <td>{{$r.Name}}</td>
+      <td><a class="chip" href="/region?id={{$id}}">{{$r.Name}}</a></td>
       <td class="status-{{$r.Status}}">{{$r.Status}}</td>
       <td class="attrs">{{range $a := index $d.Attrs $id}}<div>{{$a}}</div>{{end}}</td>
       <td class="memory">{{with index $d.Snap.Memories $id}}{{.Summary}}{{end}}</td>

@@ -1,0 +1,125 @@
+{{template "header" .}}
+
+{{$d := .Inner}}
+{{$rg := $d.Region}}
+<h1>{{$rg.Name}}</h1>
+<div class="meta-line">
+  <code>{{$rg.ID}}</code>
+  <span class="tag status-{{$rg.Status}}">{{$rg.Status}}</span>
+  <span class="rel">step {{$d.ClockStep}}{{with $d.Date}}, {{.}}{{end}}</span>
+</div>
+
+<section>
+  <h2>Canonical conditions</h2>
+  {{if not $d.Attrs}}<p class="hint">No attributes recorded.</p>{{end}}
+  {{if $d.Attrs}}<table class="attrs-list">
+    {{range $a := $d.Attrs}}<tr><td>{{$a}}</td></tr>{{end}}
+  </table>{{end}}
+</section>
+
+<section>
+  <h2>Agent memory (the historian's own working summary)</h2>
+  {{if not $d.Memory}}<p class="hint">No memory recorded yet.</p>{{end}}
+  {{with $d.Memory}}
+  <div class="prose"><p>{{.Summary}}</p></div>
+  {{if .OpenThreads}}
+  <p class="hint">open threads:
+    {{range $t := .OpenThreads}}<span class="tag">{{$t}}</span> {{end}}</p>
+  {{end}}
+  <p class="hint">updated at step {{.UpdatedStep}}</p>
+  {{end}}
+</section>
+
+<section>
+  <h2>Neighbouring regions</h2>
+  {{if not $d.NeighborRows}}<p class="hint">No connections: this region hears news only directly.</p>{{end}}
+  {{if $d.NeighborRows}}
+  <table>
+    <tr><th>id</th><th>name</th><th>status</th></tr>
+    {{range $n := $d.NeighborRows}}
+    <tr>
+      <td><a class="chip" href="/region?id={{$n.ID}}">{{$n.ID}}</a></td>
+      <td>{{if $n.Name}}{{$n.Name}}{{else}}—{{end}}</td>
+      <td>{{$n.Status}}</td>
+    </tr>
+    {{end}}
+  </table>
+  <p class="hint">Neighbors learn by report: what they know is their own
+    page, not this one.</p>
+  {{end}}
+</section>
+
+<section>
+  <h2>Entities here</h2>
+  {{if not $d.Entities}}<p class="hint">No entities located in this region.</p>{{end}}
+  {{if $d.Entities}}
+  <table>
+    <tr><th>id</th><th>name</th><th>kind</th><th>status</th></tr>
+    {{range $e := $d.Entities}}
+    <tr>
+      <td><a class="chip" href="/entity?id={{$e.ID}}">{{$e.ID}}</a></td>
+      <td>{{$e.Name}}</td>
+      <td>{{$e.Kind}}</td>
+      <td class="status-{{$e.Status}}">{{$e.Status}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<section>
+  <h2>In-world beliefs held here (may be wrong)</h2>
+  {{if not $d.BeliefRows}}<p class="hint">None recorded.</p>{{end}}
+  {{if $d.BeliefRows}}
+  <table>
+    <tr><th>about</th><th>modality</th><th>statement</th><th>as of</th></tr>
+    {{range $b := $d.BeliefRows}}
+    <tr>
+      <td>{{with $b.SubjectName}}{{$b.Belief.SubjectID}} ({{.}}){{else}}the region{{end}}</td>
+      <td class="modality-{{$b.Belief.Modality}}">{{$b.Belief.Modality}}</td>
+      <td>{{$b.Belief.Statement}}</td>
+      <td>step {{$b.Belief.AsOfStep}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<section>
+  <h2>Reports delivered here</h2>
+  {{if not $d.ReportRows}}<p class="hint">No news has arrived by report.</p>{{end}}
+  {{if $d.ReportRows}}
+  <table>
+    <tr><th>event</th><th>title</th><th>earliest step</th><th>delivered</th></tr>
+    {{range $rp := $d.ReportRows}}
+    <tr>
+      <td><a class="chip" href="/event?id={{$rp.Report.EventID}}">{{$rp.Report.EventID}}</a></td>
+      <td>{{$rp.EventTitle}}</td>
+      <td>{{$rp.Report.EarliestStep}}</td>
+      <td>{{if $rp.Report.DeliveredStep}}step {{$rp.Report.DeliveredStep}}{{else}}<span class="status-pending">in transit</span>{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<section>
+  <h2>Recent events here</h2>
+  {{if not $d.EventRows}}<p class="hint">No committed event names this region.</p>{{end}}
+  {{if $d.EventRows}}
+  <table>
+    <tr><th>step</th><th>event</th><th>type</th></tr>
+    {{range $row := $d.EventRows}}
+    <tr>
+      <td>{{$row.Event.Step}}</td>
+      <td><a href="/event?id={{$row.Event.ID}}">{{$row.Event.Title}}</a></td>
+      <td><span class="tag">{{$row.Event.Type}}</span></td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<p class="paging"><a href="/">overview</a> · <a href="/events?region={{$rg.ID}}">full regional timeline</a></p>
+
+{{template "footer" .}}

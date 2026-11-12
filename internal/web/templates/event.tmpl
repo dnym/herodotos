@@ -14,7 +14,7 @@
   <dt>regions</dt>
   <dd>{{if $ev.RegionIDs}}{{range $rg := $ev.RegionIDs}}<a class="chip" href="/events?region={{$rg}}">{{$rg}}</a> {{end}}{{else}}—{{end}}</dd>
   <dt>entities</dt>
-  <dd>{{if $ev.EntityIDs}}{{range $en := $ev.EntityIDs}}<code>{{$en}}</code> {{end}}{{else}}—{{end}}</dd>
+  <dd>{{if $ev.EntityIDs}}{{range $en := $ev.EntityIDs}}<a class="chip" href="/entity?id={{$en}}">{{$en}}</a> {{end}}{{else}}—{{end}}</dd>
   <dt>arose from</dt>
   <dd>{{if $ev.CauseIDs}}{{range $c := $ev.CauseIDs}}<a class="chip" href="/event?id={{$c}}">{{$c}}</a> {{end}}{{else}}— this step opened a new thread{{end}}</dd>
 </dl>

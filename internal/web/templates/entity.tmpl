@@ -1,0 +1,79 @@
+{{template "header" .}}
+
+{{$d := .Inner}}
+{{$en := $d.Entity}}
+<h1>{{$en.Name}}</h1>
+<div class="meta-line">
+  <code>{{$en.ID}}</code>
+  <span class="tag">{{$en.Kind}}</span>
+  <span class="tag status-{{$en.Status}}">{{$en.Status}}</span>
+  {{if $d.RegionID}}<span class="rel">of
+    <a class="chip" href="/region?id={{$d.RegionID}}">{{if $d.RegionName}}{{$d.RegionName}}{{else}}{{$d.RegionID}}{{end}}</a>
+  </span>{{end}}
+</div>
+
+<section>
+  <h2>Canonical attributes</h2>
+  {{if not $d.Attrs}}<p class="hint">No attributes recorded.</p>{{end}}
+  {{if $d.Attrs}}<table class="attrs-list">
+    {{range $a := $d.Attrs}}<tr><td>{{$a}}</td></tr>{{end}}
+  </table>{{end}}
+</section>
+
+<section>
+  <h2>Relationships</h2>
+  {{if not $d.RelRows}}<p class="hint">None recorded.</p>{{end}}
+  {{if $d.RelRows}}
+  <table>
+    <tr><th>id</th><th>direction</th><th>other</th><th>kind</th><th>status</th></tr>
+    {{range $r := $d.RelRows}}
+    <tr>
+      <td><code>{{$r.Rel.ID}}</code></td>
+      <td>{{if eq $r.Dir "from"}}this → other{{else}}other → this{{end}}</td>
+      <td><a class="chip" href="/entity?id={{$r.Other}}">{{if $r.OtherName}}{{$r.OtherName}}{{else}}{{$r.Other}}{{end}}</a></td>
+      <td>{{$r.Rel.Kind}}</td>
+      <td class="status-{{$r.Rel.Status}}">{{$r.Rel.Status}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<section>
+  <h2>Beliefs about this entity (in-world, may be wrong)</h2>
+  {{if not $d.BeliefRows}}<p class="hint">No region holds a recorded belief about it.</p>{{end}}
+  {{if $d.BeliefRows}}
+  <table>
+    <tr><th>held by</th><th>modality</th><th>statement</th><th>as of</th></tr>
+    {{range $b := $d.BeliefRows}}
+    <tr>
+      <td><a class="chip" href="/region?id={{$b.Belief.RegionID}}">{{if $b.RegionName}}{{$b.RegionName}}{{else}}{{$b.Belief.RegionID}}{{end}}</a></td>
+      <td class="modality-{{$b.Belief.Modality}}">{{$b.Belief.Modality}}</td>
+      <td>{{$b.Belief.Statement}}</td>
+      <td>step {{$b.Belief.AsOfStep}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<section>
+  <h2>Appears in events</h2>
+  {{if not $d.EventRows}}<p class="hint">No committed event names it.</p>{{end}}
+  {{if $d.EventRows}}
+  <table>
+    <tr><th>step</th><th>event</th><th>type</th></tr>
+    {{range $row := $d.EventRows}}
+    <tr>
+      <td>{{$row.Event.Step}}</td>
+      <td><a href="/event?id={{$row.Event.ID}}">{{$row.Event.Title}}</a></td>
+      <td><span class="tag">{{$row.Event.Type}}</span></td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</section>
+
+<p class="paging"><a href="/">overview</a> · <a href="/events">timeline</a></p>
+
+{{template "footer" .}}

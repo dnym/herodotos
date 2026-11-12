@@ -53,6 +53,16 @@ func newTestServer(t *testing.T, engine bool) *Server {
 		B         domain.ID `json:"b"`
 		TravelDay int       `json:"travel_days"`
 	}{{A: "king-a", B: "prin-b", TravelDay: 4}}
+	w.Entities = []struct {
+		ID       domain.ID      `json:"id"`
+		Kind     string         `json:"kind"`
+		Name     string         `json:"name"`
+		RegionID domain.ID      `json:"region_id,omitempty"`
+		Attrs    map[string]any `json:"attrs,omitempty"`
+	}{
+		{ID: "q-elinor", Kind: "person", Name: "Queen Elinor", RegionID: "king-a",
+			Attrs: map[string]any{"heir": "yes"}},
+	}
 	if err := db.InitWorld(ctx, w); err != nil {
 		t.Fatal(err)
 	}
@@ -703,3 +713,100 @@ func TestCreativeInputRefusedDuringStep(t *testing.T) {
 		t.Fatalf("step did not commit: clock %d", meta.ClockStep)
 	}
 }
+
+func TestEntityPageShowsCanonicalAndBeliefs(t *testing.T) {
+	s := newTestServer(t, true)
+	s.Engine.Client = &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: `{"prose":"Unrest spreads.","events":[{"type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]}],"beliefs":[{"subject_id":"q-elinor","modality":"uncertain","statement":"the queen plans to abdicate"}],"memory":{"summary":"Rioting began."}}`},
+		{Role: "logographer:prin-b", Text: quietPrin},
+		{Role: "orchestrator", Text: `{"notes":"accepted","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]}]}`},
+	}}
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	if _, err := s.Engine.RunStep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(t, ts, "/entity?id=q-elinor", http.StatusOK)
+	for _, want := range []string{
+		"Queen Elinor",                // name
+		"heir: yes",                   // canonical attribute
+		"the queen plans to abdicate", // belief about the entity
+		`href="/region?id=king-a"`,    // path to its region
+		"Rioting in the capital",      // event it appears in
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("entity page missing %q", want)
+		}
+	}
+
+	body = get(t, ts, "/event?id=evt-000001", http.StatusOK)
+	if !strings.Contains(body, `href="/entity?id=q-elinor"`) {
+		t.Error("event page should link entity ids to the entity page")
+	}
+
+	get(t, ts, "/entity?id=nope-404", http.StatusNotFound)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/entity?id=bad%20id", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := noRedirect.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/" {
+		t.Errorf("invalid id: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+func TestRegionPageInspectionNoCrossLeak(t *testing.T) {
+	s := newTestServer(t, true)
+	s.Engine.Client = &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingBusy},
+		{Role: "logographer:prin-b", Text: prinOpinion},
+		{Role: "orchestrator", Text: orchAcceptWeb},
+	}}
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	if _, err := s.Engine.RunStep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	king := get(t, ts, "/region?id=king-a", http.StatusOK)
+	for _, want := range []string{
+		"Kingdom A", "unrest: high", // canonical conditions (fixture + commit)
+		"Rioting began.",             // the region's own memory
+		"Queen Elinor",               // entities located here
+		`href="/entity?id=q-elinor"`, // link out
+		"prin-b",                     // neighbour identity
+	} {
+		if !strings.Contains(king, want) {
+			t.Errorf("king-a page missing %q", want)
+		}
+	}
+
+	prin := get(t, ts, "/region?id=prin-b", http.StatusOK)
+	if !strings.Contains(prin, "Kingdom A starves.") ||
+		!strings.Contains(prin, `modality-mistaken`) {
+		t.Errorf("prin-b page missing its own belief: %s", prin)
+	}
+	// prin-b's page must not expose king-a's canonical conditions.
+	if strings.Contains(prin, "unrest:") {
+		t.Error("region page leaked another region's canonical attributes")
+	}
+	// Memory is per region: prin-b's page must not carry king-a's memory.
+	if strings.Contains(prin, "Rioting began.") {
+		t.Error("region page leaked another region's agent memory")
+	}
+
+	get(t, ts, "/region?id=nope-404", http.StatusNotFound)
+}
+
+const kingBusy = `{"prose":"Unrest spreads.","events":[{"type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]}],"memory":{"summary":"Rioting began."}}`
+
+const prinOpinion = `{"prose":"We watch.","events":[],"beliefs":[{"modality":"mistaken","statement":"Kingdom A starves."}],"memory":{"summary":"Watching."}}`
+
+const orchAcceptWeb = `{"notes":"accepted","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]}]}`
