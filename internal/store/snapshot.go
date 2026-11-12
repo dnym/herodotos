@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 
 	"github.com/dnym/herodotos/internal/domain"
@@ -41,8 +42,44 @@ func (d *DB) LoadSnapshotForAttempt(ctx context.Context, step int) (*Snapshot, e
 	return d.loadSnapshot(ctx, step)
 }
 
+// qer is the subset of *sql.DB and *sql.Tx that snapshot reads need.
+type qer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// closeRows closes result sets and reports the iteration error, if
+// any: rows.Next() can stop early on a real error that only rows.Err()
+// reveals.
+func closeRows(rows *sql.Rows) error {
+	err := rows.Err()
+	if cerr := rows.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// loadSnapshot reads the snapshot through one transaction so no commit
+// can interleave and mix an old clock with new entities or events.
 func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, error) {
-	meta, err := d.GetMeta(ctx)
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	s, err := d.snapshotTx(ctx, tx, attemptStep)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// snapshotTx reads the whole snapshot on the given executor.
+func (d *DB) snapshotTx(ctx context.Context, tx *sql.Tx, attemptStep int) (*Snapshot, error) {
+	meta, err := getMeta(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +95,7 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 		RegionRefs:       map[domain.ID][]domain.ReferenceDoc{},
 	}
 
-	rows, err := d.sqlDB.QueryContext(ctx, `SELECT id, name, status, attrs FROM regions`)
+	rows, err := tx.QueryContext(ctx, `SELECT id, name, status, attrs FROM regions`)
 	if err != nil {
 		return nil, err
 	}
@@ -66,15 +103,19 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 		var r domain.Region
 		var attrs string
 		if err := rows.Scan(&r.ID, &r.Name, &r.Status, &attrs); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		r.Attrs = decodeAttrs(attrs)
 		s.Regions[r.ID] = &r
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT region_a, region_b, travel_days FROM connections ORDER BY region_a, region_b`)
 	if err != nil {
 		return nil, err
@@ -82,14 +123,18 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 	for rows.Next() {
 		var c domain.Connection
 		if err := rows.Scan(&c.A, &c.B, &c.TravelDay); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		s.Connections = append(s.Connections, c)
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT id, kind, name, COALESCE(region_id,''), status, attrs FROM entities`)
 	if err != nil {
 		return nil, err
@@ -98,15 +143,19 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 		var e domain.Entity
 		var attrs string
 		if err := rows.Scan(&e.ID, &e.Kind, &e.Name, &e.RegionID, &e.Status, &attrs); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		e.Attrs = decodeAttrs(attrs)
 		s.Entities[e.ID] = &e
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT id, source_id, target_id, kind, status, attrs FROM relationships`)
 	if err != nil {
 		return nil, err
@@ -115,15 +164,19 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 		var r domain.Relationship
 		var attrs string
 		if err := rows.Scan(&r.ID, &r.SourceID, &r.TargetID, &r.Kind, &r.Status, &attrs); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		r.Attrs = decodeAttrs(attrs)
 		s.Relationships[r.ID] = &r
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT id, text, hard, status, COALESCE(notes,'') FROM directives`)
 	if err != nil {
 		return nil, err
@@ -132,15 +185,19 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 		var dd domain.Directive
 		var hard int
 		if err := rows.Scan(&dd.ID, &dd.Text, &hard, &dd.Status, &dd.Notes); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		dd.Hard = hard == 1
 		s.Directives[dd.ID] = &dd
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT region_id, summary, open_threads, updated_step FROM memories`)
 	if err != nil {
 		return nil, err
@@ -149,19 +206,23 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 		var m domain.Memory
 		var threads string
 		if err := rows.Scan(&m.RegionID, &m.Summary, &threads, &m.UpdatedStep); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		json.Unmarshal([]byte(threads), &m.OpenThreads)
 		s.Memories[m.RegionID] = &m
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
 	horizon := meta.ClockStep
 	if attemptStep > horizon {
 		horizon = attemptStep
 	}
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT id, event_id, target_region_id, earliest_step,
 		        COALESCE(delivered_step, ?)
 		 FROM reports
@@ -174,14 +235,18 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 	for rows.Next() {
 		var rep domain.Report
 		if err := rows.Scan(&rep.ID, &rep.EventID, &rep.TargetRegionID, &rep.EarliestStep, &rep.DeliveredStep); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		s.DeliveredReports[rep.TargetRegionID] = append(s.DeliveredReports[rep.TargetRegionID], rep)
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT id, region_id, COALESCE(subject_id,''), modality, statement, as_of_step FROM beliefs ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -189,14 +254,18 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 	for rows.Next() {
 		var b domain.Belief
 		if err := rows.Scan(&b.ID, &b.RegionID, &b.SubjectID, &b.Modality, &b.Statement, &b.AsOfStep); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		s.Beliefs[b.RegionID] = append(s.Beliefs[b.RegionID], b)
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT id, scope, COALESCE(region_id,''), binding, title, body, keywords,
 		        COALESCE(description,''), enabled
 		 FROM reference_docs WHERE enabled = 1 ORDER BY id`)
@@ -208,7 +277,9 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 		var binding, enabled int
 		if err := rows.Scan(&ref.ID, &ref.Scope, &ref.RegionID, &binding, &ref.Title,
 			&ref.Body, &ref.Keywords, &ref.Description, &enabled); err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		ref.Binding = binding == 1
@@ -219,9 +290,11 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 			s.RegionRefs[ref.RegionID] = append(s.RegionRefs[ref.RegionID], ref)
 		}
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
-	rows, err = d.sqlDB.QueryContext(ctx,
+	rows, err = tx.QueryContext(ctx,
 		`SELECT id, step, type, title, prose, region_ids, entity_ids, cause_ids
 		 FROM events WHERE step > ? ORDER BY step, id`, meta.ClockStep-8)
 	if err != nil {
@@ -230,12 +303,16 @@ func (d *DB) loadSnapshot(ctx context.Context, attemptStep int) (*Snapshot, erro
 	for rows.Next() {
 		ev, err := scanEvent(rows)
 		if err != nil {
-			rows.Close()
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
 			return nil, err
 		}
 		s.RecentEvents = append(s.RecentEvents, ev)
 	}
-	rows.Close()
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
 
 	return s, nil
 }

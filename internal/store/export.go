@@ -26,8 +26,17 @@ type ExportBundle struct {
 }
 
 // ExportBundle reads the entire committed world in chronological order.
+// Every read runs inside one transaction, so the bundle is a
+// consistent snapshot: it is entirely before or entirely after any
+// concurrent commit, never a mixture.
 func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
-	snap, err := d.LoadSnapshot(ctx)
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	snap, err := d.snapshotTx(ctx, tx, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +60,7 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 		b.References = append(b.References, snap.RegionRefs[id]...)
 	}
 
-	events, err := d.ListEvents(ctx, EventQuery{Limit: 1 << 30})
+	events, err := listEvents(ctx, tx, EventQuery{Limit: 1 << 30})
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +72,7 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 	})
 	b.Events = events
 
-	rows, err := d.sqlDB.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		`SELECT id, event_id, target_region_id, earliest_step, COALESCE(delivered_step, 0)
 		 FROM reports ORDER BY id`)
 	if err != nil {
@@ -86,6 +95,9 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 	}
 	for _, id := range sortedDomainKeys(snap.Memories) {
 		b.Memories = append(b.Memories, *snap.Memories[id])
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return b, nil
 }

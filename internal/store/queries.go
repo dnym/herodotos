@@ -18,6 +18,10 @@ type EventQuery struct {
 
 // ListEvents returns committed events, newest first.
 func (d *DB) ListEvents(ctx context.Context, q EventQuery) ([]domain.Event, error) {
+	return listEvents(ctx, d.sqlDB, q)
+}
+
+func listEvents(ctx context.Context, db qer, q EventQuery) ([]domain.Event, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 50
@@ -30,7 +34,7 @@ func (d *DB) ListEvents(ctx context.Context, q EventQuery) ([]domain.Event, erro
 	}
 	query += ` ORDER BY step DESC, id DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, q.Offset)
-	rows, err := d.sqlDB.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
