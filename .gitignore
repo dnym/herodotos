@@ -1,0 +1,9 @@
+# Local agent guidance; may contain local endpoints, never uploaded
+AGENTS.md
+
+# Runtime artifacts
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.env
