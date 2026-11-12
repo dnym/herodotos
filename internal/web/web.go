@@ -690,11 +690,26 @@ func (s *Server) pageAttempt(w http.ResponseWriter, r *http.Request) {
 			calls[i].Response = calls[i].Response[:6000] + "\n…[truncated for display]"
 		}
 	}
-	s.render(w, "attempt", "Attempt "+id, r, struct {
-		Attempt   domain.Attempt
-		Proposals []store.ProposalRow
-		Calls     []store.ModelCallRow
-	}{attempt, proposals, calls})
+	detail := attemptDetail{Attempt: attempt, Proposals: proposals, Calls: calls}
+	// The live view polls this page with htmx. Polls must receive only the
+	// refreshable fragment: swapping a full page (with the main menu) into
+	// the polling div duplicates the chrome inside the page.
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := s.tmpl.ExecuteTemplate(w, "attemptlive", detail); err != nil {
+			fmt.Println("web: render attemptlive:", err)
+		}
+		return
+	}
+	s.render(w, "attempt", "Attempt "+id, r, detail)
+}
+
+// attemptDetail is the attempt page payload, shared by the full page and
+// the htmx polling fragment.
+type attemptDetail struct {
+	Attempt   domain.Attempt
+	Proposals []store.ProposalRow
+	Calls     []store.ModelCallRow
 }
 
 // --- helpers ---

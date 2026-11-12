@@ -107,6 +107,25 @@ func get(t *testing.T, ts *httptest.Server, path string, want int) string {
 	return string(b)
 }
 
+func hxGet(t *testing.T, ts *httptest.Server, path string) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("HX-Request", "true")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HX GET %s: status %d body %s", path, resp.StatusCode, b)
+	}
+	return string(b)
+}
+
 func postForm(t *testing.T, ts *httptest.Server, path string, vals url.Values, origin string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(vals.Encode()))
@@ -467,10 +486,21 @@ func TestLiveAttemptView(t *testing.T) {
 		t.Errorf("panel lacks live link: %s", panel)
 	}
 
-	// The attempt page announces itself live and polls itself.
+	// The attempt page announces itself live and polls itself for the
+	// refreshable fragment only (outerHTML so polling stops on finish).
 	body := get(t, ts, "/attempt?id="+attemptID, http.StatusOK)
 	if !strings.Contains(body, "in progress") || !strings.Contains(body, `hx-trigger="every 4s"`) {
 		t.Errorf("attempt page not live: %s", body)
+	}
+	if !strings.Contains(body, `hx-swap="outerHTML"`) {
+		t.Error("live poll must swap outerHTML, not innerHTML")
+	}
+	frag := hxGet(t, ts, "/attempt?id="+attemptID)
+	if strings.Contains(frag, "<header") || strings.Contains(frag, "<nav") || strings.Contains(frag, "all attempts") {
+		t.Error("htmx poll returned a full page instead of a fragment: menu chrome would duplicate")
+	}
+	if !strings.Contains(frag, "attempt-status") {
+		t.Errorf("poll fragment lacks live status: %s", frag)
 	}
 
 	// As model calls land they appear with their replies.
@@ -497,6 +527,12 @@ func TestLiveAttemptView(t *testing.T) {
 	body = get(t, ts, "/attempt?id="+attemptID, http.StatusOK)
 	if !strings.Contains(body, "committed") || strings.Contains(body, `hx-trigger="every 4s"`) {
 		t.Error("finished attempt still polling or not marked committed")
+	}
+	// A late poll (browser still open) gets the static fragment and
+	// carries no polling instructions: htmx stops.
+	frag = hxGet(t, ts, "/attempt?id="+attemptID)
+	if !strings.Contains(frag, "committed") || strings.Contains(frag, "hx-get") {
+		t.Errorf("poll after finish must stop polling: %s", frag)
 	}
 	get(t, ts, "/attempt?id=att-999999", http.StatusNotFound)
 }

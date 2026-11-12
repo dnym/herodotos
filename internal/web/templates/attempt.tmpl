@@ -1,60 +1,9 @@
 {{template "header" .}}
 
 {{$d := .Inner}}
-{{$live := eq $d.Attempt.Status "running"}}
 <h1>Attempt <code>{{$d.Attempt.ID}}</code></h1>
 <p><a href="/attempts">&larr; all attempts</a></p>
 
-{{if $live}}
-<div class="livewrap" hx-get="/attempt?id={{$d.Attempt.ID}}" hx-trigger="every 4s" hx-swap="innerHTML">
-{{end}}
-
-<p class="attempt-status status-{{$d.Attempt.Status}}">
-  {{if $live}}step {{$d.Attempt.Step}} in progress &mdash; the historians are at work; this page refreshes as calls land
-  {{else if eq $d.Attempt.Status "committed"}}committed
-  {{else}}failed: {{$d.Attempt.Error}}{{if $d.Attempt.PauseReason}} &mdash; halted the world: {{$d.Attempt.PauseReason}}{{end}}{{end}}
-</p>
-
-<section>
-  <h2>Proposals (agent output; never canonical on their own)</h2>
-  {{if not $d.Proposals}}<p class="hint">None recorded{{if $live}} yet{{end}}.</p>{{end}}
-  {{range $p := $d.Proposals}}
-  <article class="proposal">
-    <p><strong>{{$p.Author}}</strong> <span class="type">{{$p.Kind}}</span> <code>{{$p.ID}}</code></p>
-    <blockquote>{{$p.Prose}}</blockquote>
-    <details><summary>structured changes</summary>
-      <pre>changes:        {{$p.Changes}}
-affects_regions: {{$p.AffectsRegions}}
-affects_entities:{{$p.AffectsEntities}}
-causes:          {{$p.Causes}}
-delivery:        {{$p.Delivery}}</pre>
-    </details>
-  </article>
-  {{end}}
-</section>
-
-<section>
-  <h2>Model calls</h2>
-  {{if not $d.Calls}}<p class="hint">None recorded{{if $live}} yet{{end}}.</p>{{end}}
-  <table>
-    <tr><th>#</th><th>role</th><th>model</th><th>in</th><th>out</th><th>ms</th><th>outcome</th></tr>
-    {{range $c := $d.Calls}}
-    <tr>
-      <td>{{$c.Seq}}</td>
-      <td><code>{{$c.Role}}</code></td>
-      <td>{{$c.Model}}</td>
-      <td>{{$c.InTokens}}</td>
-      <td>{{$c.OutTokens}}</td>
-      <td>{{$c.DurationMS}}</td>
-      <td>
-        {{if $c.Error}}<span class="err">{{$c.Error}}</span>{{else}}ok{{end}}
-        {{if $c.Response}}<details><summary>reply</summary><pre class="reply">{{$c.Response}}</pre></details>{{end}}
-      </td>
-    </tr>
-    {{end}}
-  </table>
-</section>
-
-{{if $live}}</div>{{end}}
+{{template "attemptlive" $d}}
 
 {{template "footer" .}}
