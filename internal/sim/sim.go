@@ -80,9 +80,10 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		return nil, fmt.Errorf("%w: %s (resolve the conflict, then resume)", ErrPaused, reason)
 	}
 
-	// Open the attempt first: BeginAttempt marks this boundary's report
-	// deliveries durably, so the snapshot below (and every agent view
-	// built from it) already sees news that has now arrived.
+	// Open the attempt first so its diagnostics row exists before any
+	// work begins. Report deliveries are applied to the snapshot
+	// provisionally for this step (LoadSnapshotForAttempt) and marked
+	// durably only when the step commits.
 	meta, err := e.DB.GetMeta(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("meta: %w", err)

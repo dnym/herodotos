@@ -22,9 +22,10 @@ Reply with ONE JSON object and nothing else:
 }
 
 Rules:
-- Your ENTIRE reply must fit within 1,100 tokens (about 4,400
-  characters). That is a hard limit: a longer reply is discarded and
-  wasted work. Keep notes at most 60 words and each event's prose at
+- Aim to finish your reply well within 1,100 tokens (about 4,400
+  characters); the transport enforces a larger hard ceiling and
+  discards anything past it, which is wasted work.
+  Keep notes at most 60 words and each event's prose at
   most 2 short sentences. Always complete, valid JSON: when merging
   proposals, keep changes minimal and patches short (at most 10 keys
   per patch). A complete smaller reply always beats a rich truncated

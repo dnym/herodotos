@@ -34,8 +34,9 @@ Reply with ONE JSON object and nothing else:
 }
 
 Hard rules:
-- Your ENTIRE reply must fit within 600 tokens (about 2,400 characters).
-  That is a hard limit: a longer reply is discarded and wasted work.
+- Aim to finish your reply well within 600 tokens (about 2,400
+  characters); the transport enforces a larger hard ceiling and
+  discards anything past it, which is wasted work.
   Spend the budget on structure, not on prose. Concretely: "prose" at
   most 40 words; at most 3 events; each event's prose at most 2 short
   sentences; memory "summary" at most 60 words; at most 4 "open_threads"

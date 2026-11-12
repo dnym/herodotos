@@ -19,4 +19,12 @@ func TestBudgetsFromEnv(t *testing.T) {
 	if def.MaxOutputTokensOrchestr <= def.MaxOutputTokens {
 		t.Error("orchestrator ceiling must exceed the regional ceiling")
 	}
+
+	// An explicit zero is a deliberate choice, not a mistake.
+	t.Setenv("HERODOTOS_BUDGET_MAX_REACTION_ROUNDS", "0")
+	t.Setenv("HERODOTOS_BUDGET_MAX_CORRECTION_RETRIES", "0")
+	b = BudgetsFromEnv()
+	if b.MaxReactionRounds != 0 || b.MaxCorrectionRetries != 0 {
+		t.Errorf("zero overrides must be honoured: %+v", b)
+	}
 }

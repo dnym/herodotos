@@ -40,12 +40,14 @@ func DefaultBudgets() Budgets {
 
 // BudgetsFromEnv returns the defaults with any HERODOTOS_BUDGET_*
 // overrides applied: each named after the field in SCREAMING_SNAKE,
-// e.g. HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS=8000. A non-numeric or
-// non-positive override is ignored.
+// e.g. HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS=8000. Reaction rounds and
+// correction retries accept an explicit 0 (deliberately switching the
+// mechanism off); for every other knob a non-numeric or non-positive
+// override is ignored.
 func BudgetsFromEnv() Budgets {
 	b := DefaultBudgets()
-	envInt("HERODOTOS_BUDGET_MAX_REACTION_ROUNDS", &b.MaxReactionRounds)
-	envInt("HERODOTOS_BUDGET_MAX_CORRECTION_RETRIES", &b.MaxCorrectionRetries)
+	envIntNonNeg("HERODOTOS_BUDGET_MAX_REACTION_ROUNDS", &b.MaxReactionRounds)
+	envIntNonNeg("HERODOTOS_BUDGET_MAX_CORRECTION_RETRIES", &b.MaxCorrectionRetries)
 	envInt("HERODOTOS_BUDGET_MAX_MODEL_CALLS_PER_STEP", &b.MaxModelCallsPerStep)
 	envInt("HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS", &b.MaxOutputTokens)
 	envInt("HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS_ORCHESTR", &b.MaxOutputTokensOrchestr)
@@ -56,6 +58,14 @@ func BudgetsFromEnv() Budgets {
 func envInt(key string, into *int) {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*into = n
+		}
+	}
+}
+
+func envIntNonNeg(key string, into *int) {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			*into = n
 		}
 	}
