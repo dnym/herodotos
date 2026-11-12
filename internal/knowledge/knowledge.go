@@ -25,16 +25,16 @@ type ReportNote struct {
 // LogographerView is everything one regional agent may know at this
 // boundary.
 type LogographerView struct {
-	Region       *domain.Region
-	Memory       *domain.Memory
-	Beliefs      []domain.Belief
-	Reports      []ReportNote // news from other regions, already delivered
-	Entities     []*domain.Entity
+	Region        *domain.Region
+	Memory        *domain.Memory
+	Beliefs       []domain.Belief
+	Reports       []ReportNote // news from other regions, already delivered
+	Entities      []*domain.Entity
 	Relationships []*domain.Relationship // among visible entities
-	Directives   []domain.Directive
-	Refs         []domain.ReferenceDoc // world-scoped + region-scoped
-	RecentEvents []domain.Event        // canonical events involving this region
-	AdjacentIDs  []domain.ID           // neighbor identity only, no conditions
+	Directives    []domain.Directive
+	Refs          []domain.ReferenceDoc // world-scoped + region-scoped
+	RecentEvents  []domain.Event        // canonical events involving this region
+	AdjacentIDs   []domain.ID           // neighbor identity only, no conditions
 }
 
 // EventLookup resolves an event id; *store.DB.GetEvent satisfies it.
