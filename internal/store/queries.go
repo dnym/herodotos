@@ -219,7 +219,7 @@ func (d *DB) ListAttempts(ctx context.Context, limit int) ([]domain.Attempt, err
 		limit = 20
 	}
 	rows, err := d.sqlDB.QueryContext(ctx,
-		`SELECT id, step, status, COALESCE(error,'') FROM attempts ORDER BY id DESC LIMIT ?`, limit)
+		`SELECT id, step, status, COALESCE(error,''), COALESCE(pause_reason,'') FROM attempts ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +227,7 @@ func (d *DB) ListAttempts(ctx context.Context, limit int) ([]domain.Attempt, err
 	var out []domain.Attempt
 	for rows.Next() {
 		var a domain.Attempt
-		if err := rows.Scan(&a.ID, &a.Step, &a.Status, &a.Error); err != nil {
+		if err := rows.Scan(&a.ID, &a.Step, &a.Status, &a.Error, &a.PauseReason); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

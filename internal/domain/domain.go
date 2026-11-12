@@ -178,8 +178,9 @@ type ReferenceDoc struct {
 
 // Attempt groups all diagnostics of one step execution.
 type Attempt struct {
-	ID     ID
-	Step   int // the step boundary this attempt advances to
-	Status string
-	Error  string
+	ID          ID     `json:"id"`
+	Step        int    `json:"step"` // the step boundary this attempt advances to
+	Status      string `json:"status"`
+	Error       string `json:"error"`
+	PauseReason string `json:"pause_reason"` // set when this attempt halted the world
 }

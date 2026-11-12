@@ -13,18 +13,7 @@
       <span class="sub">step {{$d.Snap.Meta.ClockStep}} · {{$d.Snap.Meta.StepDays}}-day steps</span>
     </div>
   </div>
-  {{if $d.HasStep}}
-  <form method="post" action="/step" class="stepform"
-        hx-post="/step"
-        hx-on::before-request="this.querySelector('button').disabled = true">
-    <button type="submit">advance one step</button>
-    <span class="htmx-indicator">the logographers are conferring — a live step takes minutes</span>
-  </form>
-  {{else}}
-  <p class="hint">no inference configured — start <code>serve</code> with
-  <code>HERODOTOS_INFERENCE_BASE_URL</code>/<code>HERODOTOS_INFERENCE_MODEL</code>
-  (or <code>--scripted</code>) to advance the world from here</p>
-  {{end}}
+  {{template "runpanel" $d.Panel}}
 </section>
 
 <section>
@@ -46,17 +35,39 @@
 {{if $d.Snap.Directives}}
 <section>
   <h2>Directives</h2>
-  <table>
-    <tr><th>id</th><th>strength</th><th>status</th><th>text</th></tr>
+  <p class="hint">Creative direction, not fact. You can reword directives here;
+  the historians never change them themselves.</p>
+  <table class="directives">
+    <tr><th>id</th><th>kind</th><th>status</th><th>text</th></tr>
     {{range $id, $dir := $d.Snap.Directives}}
     <tr>
       <td><code>{{$id}}</code></td>
       <td>{{if $dir.Hard}}hard{{else}}soft{{end}}</td>
       <td class="status-{{$dir.Status}}">{{$dir.Status}}</td>
-      <td>{{$dir.Text}}</td>
+      <td>
+        <form method="post" action="/directive/edit" class="dirform">
+          <input type="hidden" name="id" value="{{$id}}">
+          <textarea name="text" rows="2" maxlength="500">{{$dir.Text}}</textarea>
+          <button type="submit" class="secondary">save</button>
+        </form>
+      </td>
     </tr>
     {{end}}
   </table>
+  <form method="post" action="/directive/add" class="dirform adddir">
+    <textarea name="text" rows="2" maxlength="500" placeholder="a new directive for the historians…"></textarea>
+    <label class="hardbox"><input type="checkbox" name="hard" value="1"> hard</label>
+    <button type="submit" class="secondary">add directive</button>
+  </form>
+</section>
+{{else}}
+<section>
+  <h2>Directives</h2>
+  <form method="post" action="/directive/add" class="dirform adddir">
+    <textarea name="text" rows="2" maxlength="500" placeholder="a directive for the historians…"></textarea>
+    <label class="hardbox"><input type="checkbox" name="hard" value="1"> hard</label>
+    <button type="submit" class="secondary">add directive</button>
+  </form>
 </section>
 {{end}}
 

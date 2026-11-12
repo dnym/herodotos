@@ -1,13 +1,14 @@
-// Package web serves a read-mostly overview of a Herodotos world: the
-// canonical timeline, regional conditions, and attempt diagnostics. The
-// step action runs the simulation engine in this process, serialized by
-// a mutex; the database itself is additionally protected by the
-// single-writer lock.
+// Package web serves a Herodotos world: the canonical timeline, regional
+// conditions, attempt diagnostics, run control, and structured export.
+// Steps execute in server-managed background runs, serialized by a mutex;
+// closing a browser tab never terminates a run. The database itself is
+// additionally protected by the single-writer lock.
 package web
 
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -30,10 +31,28 @@ var assets embed.FS
 // Server exposes one world database over HTTP.
 type Server struct {
 	DB     *store.DB
-	Engine *sim.Engine // nil when no inference is configured
+	Engine *sim.Engine // nil when no inference configured
 
-	mu   sync.Mutex // one step at a time
+	stepMu sync.Mutex // one engine step at a time
+	runMu  sync.Mutex // guards run
+	run    *runState  // current or most recent background run
+
+	// runCtx is the server lifetime context for background steps: a
+	// request ending must never cancel a step, but shutting the server
+	// down should.
+	runCtx context.Context
+
 	tmpl *template.Template
+}
+
+// runState is the observable state of one background run.
+type runState struct {
+	Active         bool
+	Until          int // remaining steps in this run; -1 runs until stopped
+	PauseRequested bool
+	StepsDone      int
+	LastResult     string
+	LastErr        string
 }
 
 // ListenAndServe starts the overview server and shuts down on ctx end.
@@ -46,6 +65,10 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		return fmt.Errorf("web templates: %w", err)
 	}
 	s.tmpl = tmpl
+
+	runCtx, cancelRun := context.WithCancel(ctx)
+	s.runCtx = runCtx
+	defer cancelRun()
 
 	httpSrv := &http.Server{
 		Addr:              addr,
@@ -72,10 +95,263 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /event", s.pageEvent)
 	mux.HandleFunc("GET /attempts", s.pageAttempts)
 	mux.HandleFunc("GET /attempt", s.pageAttempt)
-	mux.HandleFunc("POST /step", s.actionStep)
+	mux.HandleFunc("GET /run/panel", s.partialRunPanel)
+	mux.HandleFunc("GET /export", s.pageExport)
+	// Every mutation must be same-origin: the server never sets CORS
+	// allow headers, and a carried Origin must match the Host. That is
+	// the CSRF posture for a local, credential-free tool.
+	mutation := func(h http.HandlerFunc) http.Handler { return sameOrigin(h) }
+	mux.Handle("POST /step", mutation(s.actionStartRun)) // alias: one step
+	mux.Handle("POST /run/start", mutation(s.actionStartRun))
+	mux.Handle("POST /run/pause", mutation(s.actionPauseRun))
+	mux.Handle("POST /run/resume", mutation(s.actionResumeWorld))
+	mux.Handle("POST /directive/edit", mutation(s.actionDirectiveEdit))
+	mux.Handle("POST /directive/add", mutation(s.actionDirectiveAdd))
 	// embed paths keep the static/ prefix, so the URI maps directly.
 	mux.Handle("GET /static/", http.FileServerFS(assets))
 	return logRequests(mux)
+}
+
+// sameOrigin rejects cross-origin mutations (FR: mutation endpoints must
+// not accept cross-origin requests, even locally).
+func sameOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" && !originMatches(origin, r.Host) {
+			http.Error(w, "cross-origin mutation refused", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func originMatches(origin, host string) bool {
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(u.Host, host)
+}
+
+// --- background runs ---
+
+// beginRun starts a background run of the given number of steps
+// (-1 = until stopped). One run at a time; step boundaries are the only
+// pause points, which keeps every step atomic.
+func (s *Server) beginRun(steps int) error {
+	if s.runCtx != nil && s.runCtx.Err() != nil {
+		return errors.New("server is shutting down")
+	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	if s.run != nil && s.run.Active {
+		return errors.New("a run is already in progress")
+	}
+	rs := &runState{Active: true, Until: steps}
+	s.run = rs
+	go s.runLoop(rs)
+	return nil
+}
+
+func (s *Server) runLoop(rs *runState) {
+	ctx := s.runCtx
+	if ctx == nil {
+		ctx = context.Background() // direct route wiring in tests
+	}
+	for {
+		s.runMu.Lock()
+		pauseRequested := rs.PauseRequested
+		s.runMu.Unlock()
+		if pauseRequested {
+			s.finishRun(rs, fmt.Sprintf("run stopped at step boundary after %d step(s)", rs.StepsDone))
+			return
+		}
+		if reason, paused, err := s.DB.WorldPause(ctx); err == nil && paused {
+			s.finishRun(rs, "the world is paused: "+reason)
+			return
+		}
+
+		s.stepMu.Lock()
+		res, err := s.Engine.RunStep(ctx)
+		s.stepMu.Unlock()
+
+		s.runMu.Lock()
+		rs.StepsDone++
+		if err != nil {
+			rs.Active = false
+			rs.LastErr = err.Error()
+			s.runMu.Unlock()
+			return
+		}
+		rs.LastResult = fmt.Sprintf("step %d committed: %d event(s), %d model call(s)",
+			res.Step, len(res.EventIDs), res.ModelCalls)
+		rs.LastErr = ""
+		if rs.Until > 0 {
+			rs.Until--
+			if rs.Until == 0 {
+				rs.Active = false
+				s.runMu.Unlock()
+				return
+			}
+		}
+		s.runMu.Unlock()
+	}
+}
+
+func (s *Server) finishRun(rs *runState, result string) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	rs.Active = false
+	rs.LastResult = result
+}
+
+// --- run panel ---
+
+type panelData struct {
+	HasEngine  bool
+	WorldPause string // "" when not durably paused
+	Active     bool
+	PauseReq   bool
+	StepsDone  int
+	LastResult string
+	LastErr    string
+}
+
+func (s *Server) panelData(ctx context.Context) panelData {
+	pd := panelData{HasEngine: s.Engine != nil}
+	if reason, paused, err := s.DB.WorldPause(ctx); err == nil && paused {
+		pd.WorldPause = reason
+	}
+	s.runMu.Lock()
+	if s.run != nil {
+		pd.Active = s.run.Active
+		pd.PauseReq = s.run.PauseRequested
+		pd.StepsDone = s.run.StepsDone
+		pd.LastResult = s.run.LastResult
+		pd.LastErr = s.run.LastErr
+	}
+	s.runMu.Unlock()
+	return pd
+}
+
+func (s *Server) partialRunPanel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.tmpl.ExecuteTemplate(w, "runpanel", s.panelData(r.Context())); err != nil {
+		fmt.Println("web: render runpanel:", err)
+	}
+}
+
+// --- actions ---
+
+func (s *Server) actionStartRun(w http.ResponseWriter, r *http.Request) {
+	if s.Engine == nil {
+		redirectFlash(w, r, "/attempts",
+			"no inference configured: set HERODOTOS_INFERENCE_BASE_URL and HERODOTOS_INFERENCE_MODEL", true)
+		return
+	}
+	if reason, paused, err := s.DB.WorldPause(r.Context()); err == nil && paused {
+		redirectFlash(w, r, "/", "the world is paused: "+reason+" — resolve and resume first", true)
+		return
+	}
+	steps := stepsFormValue(r.FormValue("steps"))
+	if err := s.beginRun(steps); err != nil {
+		redirectFlash(w, r, "/", err.Error(), true)
+		return
+	}
+	switch {
+	case steps < 0:
+		redirectFlash(w, r, "/", "run started: stepping until stopped — closing this page does not stop it", false)
+	case steps == 1:
+		redirectFlash(w, r, "/", "run started: one step — closing this page does not stop it", false)
+	default:
+		redirectFlash(w, r, "/", fmt.Sprintf("run started: %d steps — closing this page does not stop it", steps), false)
+	}
+}
+
+func (s *Server) actionPauseRun(w http.ResponseWriter, r *http.Request) {
+	s.runMu.Lock()
+	if s.run != nil && s.run.Active {
+		s.run.PauseRequested = true
+		s.runMu.Unlock()
+		redirectFlash(w, r, "/", "pause requested: the run stops at the next step boundary", false)
+		return
+	}
+	s.runMu.Unlock()
+	redirectFlash(w, r, "/", "no run is in progress", true)
+}
+
+func (s *Server) actionResumeWorld(w http.ResponseWriter, r *http.Request) {
+	if err := s.DB.ResumeWorld(r.Context()); err != nil {
+		redirectFlash(w, r, "/", "resume failed: "+err.Error(), true)
+		return
+	}
+	redirectFlash(w, r, "/", "the world is resumed — stepping can continue", false)
+}
+
+// stepsFormValue maps the run form's steps field to a step count.
+func stepsFormValue(v string) int {
+	switch v {
+	case "all":
+		return -1
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
+	}
+	return 1
+}
+
+// --- directives ---
+
+func (s *Server) actionDirectiveEdit(w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("id")
+	text := strings.TrimSpace(r.FormValue("text"))
+	if !domain.ValidID(id) || text == "" || len(text) > 500 {
+		redirectFlash(w, r, "/", "a directive needs a valid id and 1-500 characters of text", true)
+		return
+	}
+	ok, err := s.DB.UpdateDirectiveText(r.Context(), domain.ID(id), text)
+	if err != nil {
+		redirectFlash(w, r, "/", "update failed: "+err.Error(), true)
+		return
+	}
+	if !ok {
+		redirectFlash(w, r, "/", "no such directive: "+id, true)
+		return
+	}
+	redirectFlash(w, r, "/", "directive "+id+" updated", false)
+}
+
+func (s *Server) actionDirectiveAdd(w http.ResponseWriter, r *http.Request) {
+	text := strings.TrimSpace(r.FormValue("text"))
+	if text == "" || len(text) > 500 {
+		redirectFlash(w, r, "/", "a directive needs 1-500 characters of text", true)
+		return
+	}
+	hard := r.FormValue("hard") == "1"
+	id, err := s.DB.CreateDirective(r.Context(), text, hard)
+	if err != nil {
+		redirectFlash(w, r, "/", "could not add directive: "+err.Error(), true)
+		return
+	}
+	kind := "soft"
+	if hard {
+		kind = "hard"
+	}
+	redirectFlash(w, r, "/", "directive "+id+" added ("+kind+")", false)
+}
+
+// --- export ---
+
+func (s *Server) pageExport(w http.ResponseWriter, r *http.Request) {
+	b, err := s.DB.ExportBundle(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="herodotos-%s-step%d.json"`, b.Meta.WorldID, b.Meta.ClockStep))
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(b); err != nil {
+		fmt.Println("web: export:", err)
+	}
 }
 
 // --- rendering ---
@@ -121,7 +397,7 @@ type overviewData struct {
 	Snap    *store.Snapshot
 	Date    string
 	Pending int
-	HasStep bool
+	Panel   panelData
 	Attrs   map[domain.ID][]string // region id -> "key: value" lines
 }
 
@@ -155,7 +431,7 @@ func (s *Server) pageOverview(w http.ResponseWriter, r *http.Request) {
 	if date == "" {
 		date = "—"
 	}
-	od := overviewData{Snap: snap, HasStep: s.Engine != nil, Date: date, Attrs: map[domain.ID][]string{}}
+	od := overviewData{Snap: snap, Date: date, Attrs: map[domain.ID][]string{}, Panel: s.panelData(ctx)}
 	for id, rg := range snap.Regions {
 		od.Attrs[id] = attrLines(rg.Attrs)
 	}
@@ -315,40 +591,17 @@ func (s *Server) pageAttempt(w http.ResponseWriter, r *http.Request) {
 	}{id, proposals, calls})
 }
 
-// --- step action ---
+// --- helpers ---
 
-func (s *Server) actionStep(w http.ResponseWriter, r *http.Request) {
-	if s.Engine == nil {
-		redirectFlash(w, r, "/attempts",
-			"no inference configured: set HERODOTOS_INFERENCE_BASE_URL and HERODOTOS_INFERENCE_MODEL", true)
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	res, err := s.Engine.RunStep(r.Context())
-	if err != nil {
-		redirectFlash(w, r, "/attempts", "step not committed: "+err.Error(), true)
-		return
-	}
-	msg := fmt.Sprintf("step %d committed: %d event(s), %d model call(s)", res.Step, len(res.EventIDs), res.ModelCalls)
-	redirectFlash(w, r, "/", msg, false)
-}
-
-// redirectFlash sends the browser (or htmx, via HX-Redirect) to a page
-// carrying a one-shot notice in the query string.
+// redirectFlash sends the browser to a page carrying a one-shot notice
+// in the query string.
 func redirectFlash(w http.ResponseWriter, r *http.Request, path, msg string, isErr bool) {
 	q := url.Values{}
 	if isErr {
 		msg = "! " + msg // notice() reads the "!" prefix as the error flag
 	}
 	q.Set("flash", msg)
-	loc := path + "?" + q.Encode()
-	if r.Header.Get("HX-Request") == "true" {
-		w.Header().Set("HX-Redirect", loc)
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	http.Redirect(w, r, loc, http.StatusSeeOther)
+	http.Redirect(w, r, path+"?"+q.Encode(), http.StatusSeeOther)
 }
 
 func notice(r *http.Request) (string, bool) {
