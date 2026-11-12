@@ -90,8 +90,9 @@ lock error.
 - Structural invariants are enforced by code; semantic plausibility is
   the orchestrator's job. The engine is not a hand-coded civilization
   simulator.
-- All budgets are explicit: two reaction rounds, two correction retries,
-  twenty model calls per step (see `internal/config`).
+- All budgets are explicit and env-tunable: two reaction rounds, two
+  correction retries, twenty model calls per step, per-role output
+  ceilings (see `internal/config` and `herodotos --help`).
 
 ## Development
 

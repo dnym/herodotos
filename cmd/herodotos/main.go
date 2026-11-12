@@ -33,6 +33,14 @@ Inference for step/run/serve comes from the environment:
   HERODOTOS_INFERENCE_MODEL      model name
   HERODOTOS_INFERENCE_TIMEOUT    Go duration, default 120s
 
+Step budgets are tunable per process (defaults otherwise):
+  HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS          default 6000
+  HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS_ORCHESTR default 8000
+  HERODOTOS_BUDGET_MAX_MODEL_CALLS_PER_STEP   default 20
+  HERODOTOS_BUDGET_MAX_REACTION_ROUNDS        default 2
+  HERODOTOS_BUDGET_MAX_CORRECTION_RETRIES     default 2
+  HERODOTOS_BUDGET_MAX_PROMPT_BYTES           default 120000
+
 For deterministic offline runs, add --scripted <fixture.json>:
 a JSON array of {"role": "...", "text": "..."} replies consumed in order.
 `
@@ -101,7 +109,7 @@ func openEngine(dbPath, scripted *string) (*store.DB, *sim.Engine, error) {
 		db.Close()
 		return nil, nil, errors.New("no inference configured: set HERODOTOS_INFERENCE_BASE_URL and HERODOTOS_INFERENCE_MODEL, or pass --scripted")
 	}
-	return db, &sim.Engine{DB: db, Client: client, ModelName: modelName, Budgets: config.DefaultBudgets()}, nil
+	return db, &sim.Engine{DB: db, Client: client, ModelName: modelName, Budgets: config.BudgetsFromEnv()}, nil
 }
 
 func runInit(ctx context.Context, args []string) error {
@@ -341,11 +349,11 @@ func runServe(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		eng = &sim.Engine{DB: db, Client: fake, ModelName: "scripted", Budgets: config.DefaultBudgets()}
+		eng = &sim.Engine{DB: db, Client: fake, ModelName: "scripted", Budgets: config.BudgetsFromEnv()}
 	} else if inf, ok := config.InferenceFromEnv(); ok {
 		eng = &sim.Engine{DB: db,
 			Client:    &inference.HTTPClient{BaseURL: inf.BaseURL, Model: inf.Model, Timeout: inf.Timeout},
-			ModelName: inf.Model, Budgets: config.DefaultBudgets()}
+			ModelName: inf.Model, Budgets: config.BudgetsFromEnv()}
 	}
 
 	srv := &web.Server{DB: db, Engine: eng}

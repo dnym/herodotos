@@ -5,13 +5,18 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
 
 // Budgets bounds one simulation step. Defaults follow the MVP policy:
 // two reaction/revision rounds and two correction retries. Output is
 // budgeted per role because the orchestrator re-emits the merged
-// history and needs the larger ceiling.
+// history and needs the larger ceiling. The ceilings are headroom over
+// what prompt-disciplined replies actually produce (live runs showed
+// logographer replies of 1-2.5k tokens): they guard against runaway
+// verbosity, not against normal output. Every field can be overridden
+// with an environment variable.
 type Budgets struct {
 	MaxReactionRounds       int
 	MaxCorrectionRetries    int
@@ -21,15 +26,38 @@ type Budgets struct {
 	MaxPromptBytes          int
 }
 
-// DefaultBudgets returns the provisional MVP defaults.
+// DefaultBudgets returns the shipped defaults.
 func DefaultBudgets() Budgets {
 	return Budgets{
 		MaxReactionRounds:       2,
 		MaxCorrectionRetries:    2,
 		MaxModelCallsPerStep:    20,
-		MaxOutputTokens:         3600,
-		MaxOutputTokensOrchestr: 6000,
+		MaxOutputTokens:         6000,
+		MaxOutputTokensOrchestr: 8000,
 		MaxPromptBytes:          120_000,
+	}
+}
+
+// BudgetsFromEnv returns the defaults with any HERODOTOS_BUDGET_*
+// overrides applied: each named after the field in SCREAMING_SNAKE,
+// e.g. HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS=8000. A non-numeric or
+// non-positive override is ignored.
+func BudgetsFromEnv() Budgets {
+	b := DefaultBudgets()
+	envInt("HERODOTOS_BUDGET_MAX_REACTION_ROUNDS", &b.MaxReactionRounds)
+	envInt("HERODOTOS_BUDGET_MAX_CORRECTION_RETRIES", &b.MaxCorrectionRetries)
+	envInt("HERODOTOS_BUDGET_MAX_MODEL_CALLS_PER_STEP", &b.MaxModelCallsPerStep)
+	envInt("HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS", &b.MaxOutputTokens)
+	envInt("HERODOTOS_BUDGET_MAX_OUTPUT_TOKENS_ORCHESTR", &b.MaxOutputTokensOrchestr)
+	envInt("HERODOTOS_BUDGET_MAX_PROMPT_BYTES", &b.MaxPromptBytes)
+	return b
+}
+
+func envInt(key string, into *int) {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*into = n
+		}
 	}
 }
 
