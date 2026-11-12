@@ -27,9 +27,13 @@ Reply with ONE JSON object and nothing else:
 }
 
 Hard rules:
+- Keep the whole reply compact: short prose, terse event prose (2-3
+  sentences each). Never sacrifice valid, complete JSON for detail; when
+  room runs short, drop events, never structure.
 - Events must follow from conditions, capabilities, and motivations in
   your context. Plausibility comes before story.
-- Propose at most 4 events. Propose an empty list when nothing meaningful
+- Propose at most 4 events, at most 8 changes per event, and at most 10
+  patch keys per change. Propose an empty list when nothing meaningful
   happens; that is a normal outcome.
 - You act only inside your own region and its entities. Other regions
   decide their own reactions. Use "delivery" to let news reach them.

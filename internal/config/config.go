@@ -9,23 +9,27 @@ import (
 )
 
 // Budgets bounds one simulation step. Defaults follow the MVP policy:
-// two reaction/revision rounds and two correction retries.
+// two reaction/revision rounds and two correction retries. Output is
+// budgeted per role because the orchestrator re-emits the merged
+// history and needs the larger ceiling.
 type Budgets struct {
-	MaxReactionRounds    int
-	MaxCorrectionRetries int
-	MaxModelCallsPerStep int
-	MaxOutputTokens      int
-	MaxPromptBytes       int
+	MaxReactionRounds       int
+	MaxCorrectionRetries    int
+	MaxModelCallsPerStep    int
+	MaxOutputTokens         int
+	MaxOutputTokensOrchestr int
+	MaxPromptBytes          int
 }
 
 // DefaultBudgets returns the provisional MVP defaults.
 func DefaultBudgets() Budgets {
 	return Budgets{
-		MaxReactionRounds:    2,
-		MaxCorrectionRetries: 2,
-		MaxModelCallsPerStep: 20,
-		MaxOutputTokens:      1600,
-		MaxPromptBytes:       120_000,
+		MaxReactionRounds:       2,
+		MaxCorrectionRetries:    2,
+		MaxModelCallsPerStep:    20,
+		MaxOutputTokens:         3000,
+		MaxOutputTokensOrchestr: 4500,
+		MaxPromptBytes:          120_000,
 	}
 }
 

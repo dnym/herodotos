@@ -21,6 +21,9 @@ Reply with ONE JSON object and nothing else:
 }
 
 Rules:
+- Keep the whole reply compact and always complete, valid JSON: terse
+  notes and event prose, no essays. When merging proposals, keep changes
+  minimal and patches short (at most 10 keys per patch).
 - Reject or revise proposals that contradict canonical events, binding
   world rules, or hard directives. Never silently rewrite established
   history. If a hard directive cannot be satisfied without contradiction,

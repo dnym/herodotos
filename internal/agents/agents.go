@@ -62,6 +62,26 @@ type Pause struct {
 // maxEventsPerAgent bounds one agent's output size.
 const maxEventsPerAgent = 6
 
+// maxChangesPerEvent and maxPatchKeys keep model payloads inside the
+// output budget: terse events beat exhaustive ones.
+const (
+	maxChangesPerEvent = 8
+	maxPatchKeys       = 10
+)
+
+// checkSize enforces the structural size limits common to all agents.
+func checkSize(ev *domain.PropEvent, maxChanges, maxKeys int) error {
+	if len(ev.Changes) > maxChanges {
+		return fmt.Errorf("event %q has %d changes (max %d)", ev.Title, len(ev.Changes), maxChanges)
+	}
+	for _, ch := range ev.Changes {
+		if len(ch.Patch) > maxKeys {
+			return fmt.Errorf("change on %q has %d patch keys (max %d)", ch.ObjectID, len(ch.Patch), maxKeys)
+		}
+	}
+	return nil
+}
+
 // ParseLogographerReply decodes a reply, tolerating code fences but
 // requiring a complete JSON object.
 func ParseLogographerReply(text string) (*LogographerReply, error) {
@@ -295,6 +315,9 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 	if len(ev.Title) > 200 || len(ev.Prose) > 4000 {
 		return fmt.Errorf("event text too long")
 	}
+	if err := checkSize(ev, maxChangesPerEvent, maxPatchKeys); err != nil {
+		return err
+	}
 	if ev.Origin != "" && ev.Origin != authorRegion {
 		return fmt.Errorf("origin %q is not your region", ev.Origin)
 	}
@@ -364,6 +387,10 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 // deliveries must respect the clock.
 func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 	newStep := pv.CurrentStep + 1
+	// Merged outcomes may carry more changes than a single agent's event.
+	if err := checkSize(ev, 2*maxChangesPerEvent, 2*maxPatchKeys); err != nil {
+		return err
+	}
 	if ev.Origin != "" && ev.Origin != "orchestrator" {
 		if _, ok := pv.Snap.Regions[ev.Origin]; !ok {
 			return fmt.Errorf("origin %q is not a region", ev.Origin)

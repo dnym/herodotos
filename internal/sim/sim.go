@@ -323,7 +323,7 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 		prompt += "\nTHE ORCHESTRATOR ASKS YOU: " + extra + "\nAnswer with the same JSON format, reacting only within your authority.\n"
 	}
 	var reply *agents.LogographerReply
-	err := retryParse(s, ctx, "logographer:"+regionID, agents.SystemLogographer(), prompt, 0.8,
+	err := retryParse(s, ctx, "logographer:"+regionID, agents.SystemLogographer(), prompt, 0.8, s.b.MaxOutputTokens,
 		func(text string) error {
 			r, err := agents.ParseLogographerReply(text)
 			if err != nil {
@@ -345,7 +345,11 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 
 func (s *stepRun) askOrchestrator(ctx context.Context, prompt string) (*agents.OrchestratorReply, error) {
 	var reply *agents.OrchestratorReply
-	err := retryParse(s, ctx, "orchestrator", agents.SystemOrchestrator(), prompt, 0.3,
+	maxTok := s.b.MaxOutputTokensOrchestr
+	if maxTok <= 0 {
+		maxTok = 2 * s.b.MaxOutputTokens
+	}
+	err := retryParse(s, ctx, "orchestrator", agents.SystemOrchestrator(), prompt, 0.3, maxTok,
 		func(text string) error {
 			r, err := agents.ParseOrchestratorReply(text)
 			if err != nil {
@@ -362,11 +366,11 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt string) (*agents.O
 
 // retryParse calls the model and feeds structured failures back for a
 // bounded number of correction rounds.
-func retryParse(s *stepRun, ctx context.Context, role, system, prompt string, temp float64, validate func(string) error) error {
+func retryParse(s *stepRun, ctx context.Context, role, system, prompt string, temp float64, maxTokens int, validate func(string) error) error {
 	correction := ""
 	var lastErr error
 	for tries := 0; tries <= s.b.MaxCorrectionRetries; tries++ {
-		text, err := s.call(ctx, role, system, prompt+correction, temp)
+		text, err := s.call(ctx, role, system, prompt+correction, temp, maxTokens)
 		if err != nil {
 			return err
 		}
@@ -379,15 +383,20 @@ func retryParse(s *stepRun, ctx context.Context, role, system, prompt string, te
 	return fmt.Errorf("exhausted %d correction retries (last: %v)", s.b.MaxCorrectionRetries, lastErr)
 }
 
-func (s *stepRun) call(ctx context.Context, role, system, prompt string, temp float64) (string, error) {
+// call performs one model interaction inside the per-step budget.
+// maxTokens <= 0 falls back to the logographer ceiling.
+func (s *stepRun) call(ctx context.Context, role, system, prompt string, temp float64, maxTokens int) (string, error) {
 	s.used++
 	if s.used > s.b.MaxModelCallsPerStep {
 		return "", fmt.Errorf("model call budget (%d) exhausted", s.b.MaxModelCallsPerStep)
 	}
+	if maxTokens <= 0 {
+		maxTokens = s.b.MaxOutputTokens
+	}
 	start := time.Now()
 	resp, callErr := s.e.Client.Complete(ctx, inference.Request{
 		Role: role, System: system, Prompt: prompt,
-		MaxTokens: s.b.MaxOutputTokens, Temperature: temp,
+		MaxTokens: maxTokens, Temperature: temp,
 	})
 	dur := int(time.Since(start).Milliseconds())
 
