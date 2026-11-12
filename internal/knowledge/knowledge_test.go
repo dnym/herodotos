@@ -1,6 +1,8 @@
 package knowledge
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/dnym/herodotos/internal/domain"
@@ -85,5 +87,43 @@ func TestClassifyReferencesCap(t *testing.T) {
 	}
 	if len(v.Catalog) != 1 || v.Catalog[0].ID != "ref-d" {
 		t.Errorf("overflow should fall back to catalog: %+v", v.Catalog)
+	}
+}
+
+type stubLookup struct{ ev domain.Event }
+
+func (l stubLookup) GetEvent(context.Context, domain.ID) (domain.Event, error) { return l.ev, nil }
+
+func TestDeliveredReportsNewestFirstBounded(t *testing.T) {
+	// A long accumulated history: 15 delivered reports. The prompt
+	// must carry the freshest news first and bound the set, so new
+	// reports are never crowded out by old ones.
+	s := &store.Snapshot{
+		Regions: map[domain.ID]*domain.Region{"king-a": {ID: "king-a", Name: "A"}},
+	}
+	s.DeliveredReports = map[domain.ID][]domain.Report{}
+	reports := make([]domain.Report, 0, 15)
+	for i := 1; i <= 15; i++ {
+		reports = append(reports, domain.Report{
+			ID: fmt.Sprintf("rep-%06d", i), EventID: fmt.Sprintf("evt-%06d", i),
+			TargetRegionID: "king-a", EarliestStep: i, DeliveredStep: i,
+		})
+	}
+	s.DeliveredReports["king-a"] = reports // snapshot order: oldest first
+
+	v, err := BuildLogographerView(context.Background(), s, "king-a",
+		stubLookup{ev: domain.Event{ID: "evt-x", Title: "T", Prose: "P", Step: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Reports) != 12 {
+		t.Fatalf("want 12 visible reports, got %d", len(v.Reports))
+	}
+	if v.ReportsHidden != 3 {
+		t.Fatalf("hidden count = %d, want 3", v.ReportsHidden)
+	}
+	if v.Reports[0].DeliveredStep != 15 || v.Reports[11].DeliveredStep != 4 {
+		t.Fatalf("reports not newest-first bounded: %d..%d",
+			v.Reports[0].DeliveredStep, v.Reports[11].DeliveredStep)
 	}
 }

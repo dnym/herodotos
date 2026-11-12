@@ -229,90 +229,204 @@ func firstRune(s string) string {
 	return string(r)
 }
 
-// RenderLogographerPrompt builds the step context for one regional agent.
-func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.LogographerView, maxBytes int) string {
-	var b strings.Builder
-	date := stepDateLabel(meta, currentStep+1)
-	fmt.Fprintf(&b, "WORLD: %s. Today (start of step %d): %s.\n\n", meta.WorldName, currentStep+1, date)
-	fmt.Fprintf(&b, "YOUR REGION: id=%s name=%q status=%s\nconditions: %s\n",
-		v.Region.ID, v.Region.Name, v.Region.Status, jsonCompact(v.Region.Attrs))
-	if v.Memory != nil {
-		fmt.Fprintf(&b, "YOUR MEMORY: %s\nopen threads: %s\n", v.Memory.Summary, jsonCompact(v.Memory.OpenThreads))
-	}
-	writeSection(&b, "ENTITIES IN YOUR REGION", func() {
-		for _, e := range v.Entities {
-			fmt.Fprintf(&b, "- %s [%s] %q status=%s attrs=%s\n", e.ID, e.Kind, e.Name, e.Status, jsonCompact(e.Attrs))
-		}
-	})
-	writeSection(&b, "RELATIONSHIPS VISIBLE TO YOU", func() {
-		for _, r := range v.Relationships {
-			fmt.Fprintf(&b, "- %s: %s -%s-> %s (%s)\n", r.ID, r.SourceID, r.Kind, r.TargetID, r.Status)
-		}
-	})
-	writeSection(&b, "YOUR CANONICAL RECENT EVENTS", func() {
-		for _, ev := range v.RecentEvents {
-			fmt.Fprintf(&b, "- %s step %d [%s] %s: %s\n", ev.ID, ev.Step, ev.Type, ev.Title, ev.Prose)
-		}
-	})
-	writeSection(&b, "DELIVERED REPORTS (news from elsewhere; others decide their own actions)", func() {
-		for _, r := range v.Reports {
-			fmt.Fprintf(&b, "- %s (event step %d, delivered step %d): %s: %s\n", r.EventID, r.EventStep, r.DeliveredStep, r.Title, r.Prose)
-		}
-	})
-	writeSection(&b, "IN-WORLD BELIEFS (may be wrong)", func() {
-		for _, bl := range v.Beliefs {
-			fmt.Fprintf(&b, "- %s about %s: %s\n", bl.Modality, orNone(bl.SubjectID), bl.Statement)
-		}
-	})
-	writeSection(&b, "NEIGHBOURING REGIONS (identity only; you do not see their conditions)", func() {
-		for _, id := range v.AdjacentIDs {
-			fmt.Fprintf(&b, "- %s\n", id)
-		}
-	})
-	writeSection(&b, "DIRECTIVES (creative direction, not fact)", func() {
-		for _, d := range v.Directives {
-			kind := "soft"
-			if d.Hard {
-				kind = "hard"
-			}
-			fmt.Fprintf(&b, "- %s [%s/%s]: %s\n", d.ID, kind, d.Status, d.Text)
-		}
-	})
-	writeSection(&b, "REFERENCE DOCUMENTS (human-authored background)", func() {
-		for _, ref := range v.Bindings {
-			fmt.Fprintf(&b, "- %s (%s/BINDING): %s\n%s\n", ref.ID, ref.Scope, ref.Title, refBody(ref))
-		}
-		for _, ref := range v.Retrieved {
-			fmt.Fprintf(&b, "- %s (%s/matched to current events): %s\n%s\n", ref.ID, ref.Scope, ref.Title, refBody(ref))
-		}
-		if len(v.Catalog) > 0 {
-			b.WriteString("Catalog (listed for background awareness; full text not loaded this step):\n")
-			for _, ref := range v.Catalog {
-				fmt.Fprintf(&b, "- %s (%s): %s", ref.ID, ref.Scope, ref.Title)
-				if ref.Description != "" {
-					fmt.Fprintf(&b, " — %s", ref.Description)
-				}
-				b.WriteString("\n")
-			}
-		}
-	})
-	b.WriteString("\nAdvance this world one step as the historian of your region. Reply with the JSON object only.")
-	out := b.String()
-	if maxBytes > 0 && len(out) > maxBytes {
-		out = out[:maxBytes] + "\n...[context truncated: prefer acting on what is shown]\n" +
-			"Advance this world one step as the historian of your region. Reply with the JSON object only."
-	}
-	return out
+// Prompt sections carry an explicit priority. Mandatory sections —
+// directives and binding references: the user's creative direction and
+// the world's rules — are never dropped for space. Optional sections
+// are included in priority order until the budget runs out, oldest
+// priority first out. If even the mandatory material cannot fit, the
+// prompt says so explicitly: a silently amnesiac agent is worse than
+// a loudly broken budget.
+type promptSection struct {
+	heading   string
+	body      string
+	mandatory bool
 }
 
-// refBody renders a reference body with a display cap; the cap keeps a
-// single oversized document from crowding out the rest of the prompt.
+const sectionTruncationMarker = "\n...[section cut by byte ceiling]\n"
+
+func (ps promptSection) full() string { return ps.heading + "\n" + ps.body }
+
+func (ps promptSection) size() int { return len(ps.heading) + 1 + len(ps.body) + 1 }
+
+// promptSpec is a rendered prompt under assembly.
+type promptSpec struct {
+	head     string
+	footer   string
+	sections []promptSection
+}
+
+func (p promptSpec) assemble(included []promptSection) string {
+	var b strings.Builder
+	b.WriteString(p.head)
+	b.WriteString("\n")
+	for _, sec := range included {
+		b.WriteString(sec.full())
+		b.WriteString("\n")
+	}
+	b.WriteString(p.footer)
+	return b.String()
+}
+
+// mandatoryOverflow assembles everything (no section dropped) and
+// appends the diagnostic that the configured ceiling cannot hold the
+// mandatory material.
+func (p promptSpec) mandatoryOverflow() string {
+	out := p.assemble(p.sections)
+	return out + "\n...[ERROR: the configured prompt budget cannot fit the mandatory directives and binding references; raise HERODOTOS_BUDGET_MAX_PROMPT_BYTES]\n" + p.footer
+}
+
+// assembleWithin drops the lowest-priority optional sections (the
+// later ones in the slice) until the prompt fits maxBytes.
+func (p promptSpec) assembleWithin(maxBytes int) string {
+	if maxBytes <= 0 {
+		return p.assemble(p.sections)
+	}
+	mandatory := 0
+	for _, sec := range p.sections {
+		if sec.mandatory {
+			mandatory++
+		}
+	}
+	for drop := 0; drop <= len(p.sections)-mandatory; drop++ {
+		included := p.sections[:len(p.sections)-drop]
+		out := p.assemble(included)
+		if len(out) <= maxBytes {
+			return out
+		}
+	}
+	return p.mandatoryOverflow()
+}
+
+// FitPrompt composes a rendered base prompt with late additions such as
+// a reaction question, a consult section, or correction feedback, and
+// applies the byte ceiling after everything is in place. When the
+// combination is too large, the base prompt is trimmed at section
+// boundaries — never the additions, which carry the immediate task.
+func FitPrompt(base, extra string, maxBytes int) string {
+	if maxBytes <= 0 || len(base)+len(extra) <= maxBytes {
+		return base + extra
+	}
+	// content is base with its trailing truncation marker stripped, so
+	// the cut search never lands inside the marker itself.
+	content := base
+	if strings.HasSuffix(content, sectionTruncationMarker) {
+		content = content[:len(content)-len(sectionTruncationMarker)]
+	}
+	for {
+		if cut := strings.LastIndex(content, "\n"); cut > 0 {
+			content = content[:cut]
+		} else {
+			content = ""
+		}
+		candidate := content + sectionTruncationMarker
+		if len(candidate)+len(extra) <= maxBytes || content == "" {
+			return candidate + extra
+		}
+	}
+}
+
+// logographerFooter is the instruction closing every regional prompt.
+const logographerFooter = "Advance this world one step as the historian of your region. Reply with the JSON object only."
+
+// RenderLogographerPrompt builds the step context for one regional agent.
+func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.LogographerView, maxBytes int) string {
+	var hb strings.Builder
+	date := stepDateLabel(meta, currentStep+1)
+	fmt.Fprintf(&hb, "WORLD: %s. Today (start of step %d): %s.\n\n", meta.WorldName, currentStep+1, date)
+	fmt.Fprintf(&hb, "YOUR REGION: id=%s name=%q status=%s\nconditions: %s\n",
+		v.Region.ID, v.Region.Name, v.Region.Status, jsonCompact(v.Region.Attrs))
+	if v.Memory != nil {
+		fmt.Fprintf(&hb, "YOUR MEMORY: %s\nopen threads: %s\n", v.Memory.Summary, jsonCompact(v.Memory.OpenThreads))
+	}
+
+	var bindings strings.Builder
+	for _, ref := range v.Bindings {
+		fmt.Fprintf(&bindings, "- %s (%s/BINDING): %s\n%s\n", ref.ID, ref.Scope, ref.Title, refFullText(ref))
+	}
+	var directives strings.Builder
+	for _, d := range v.Directives {
+		kind := "soft"
+		if d.Hard {
+			kind = "hard"
+		}
+		fmt.Fprintf(&directives, "- %s [%s/%s]: %s\n", d.ID, kind, d.Status, d.Text)
+	}
+	var entities strings.Builder
+	for _, e := range v.Entities {
+		fmt.Fprintf(&entities, "- %s [%s] %q status=%s attrs=%s\n", e.ID, e.Kind, e.Name, e.Status, jsonCompact(e.Attrs))
+	}
+	var relationships strings.Builder
+	for _, r := range v.Relationships {
+		fmt.Fprintf(&relationships, "- %s: %s -%s-> %s (%s)\n", r.ID, r.SourceID, r.Kind, r.TargetID, r.Status)
+	}
+	var recent strings.Builder
+	for _, ev := range v.RecentEvents {
+		fmt.Fprintf(&recent, "- %s step %d [%s] %s: %s\n", ev.ID, ev.Step, ev.Type, ev.Title, ev.Prose)
+	}
+	reportHeading := "DELIVERED REPORTS (news from elsewhere; others decide their own actions)"
+	if v.ReportsHidden > 0 {
+		reportHeading = fmt.Sprintf("DELIVERED REPORTS (newest first, %d older reports omitted; their events remain known history you may cite)", v.ReportsHidden)
+	}
+	var reports strings.Builder
+	for _, r := range v.Reports {
+		fmt.Fprintf(&reports, "- %s (event step %d, delivered step %d): %s: %s\n", r.EventID, r.EventStep, r.DeliveredStep, r.Title, r.Prose)
+	}
+	var beliefs strings.Builder
+	for _, bl := range v.Beliefs {
+		fmt.Fprintf(&beliefs, "- %s about %s: %s\n", bl.Modality, orNone(bl.SubjectID), bl.Statement)
+	}
+	var neighbors strings.Builder
+	for _, id := range v.AdjacentIDs {
+		fmt.Fprintf(&neighbors, "- %s\n", id)
+	}
+	var refs strings.Builder
+	for _, ref := range v.Retrieved {
+		fmt.Fprintf(&refs, "- %s (%s/matched to current events): %s\n%s\n", ref.ID, ref.Scope, ref.Title, refBody(ref))
+	}
+	if len(v.Catalog) > 0 {
+		refs.WriteString("Catalog (listed for background awareness; full text not loaded this step):\n")
+		for _, ref := range v.Catalog {
+			fmt.Fprintf(&refs, "- %s (%s): %s", ref.ID, ref.Scope, ref.Title)
+			if ref.Description != "" {
+				fmt.Fprintf(&refs, " — %s", ref.Description)
+			}
+			refs.WriteString("\n")
+		}
+	}
+
+	p := promptSpec{head: hb.String(), footer: "\n" + logographerFooter, sections: []promptSection{
+		// Mandatory: creative direction and world rules survive any
+		// budget pressure.
+		{heading: "DIRECTIVES (creative direction, not fact)", body: directives.String(), mandatory: true},
+		{heading: "REFERENCE DOCUMENTS — BINDING (world rules: act within these)", body: bindings.String(), mandatory: true},
+		// Optional, most important first: what is happening now, then
+		// supporting background, then the reference catalogue.
+		{heading: "YOUR CANONICAL RECENT EVENTS", body: recent.String()},
+		{heading: reportHeading, body: reports.String()},
+		{heading: "ENTITIES IN YOUR REGION", body: entities.String()},
+		{heading: "RELATIONSHIPS VISIBLE TO YOU", body: relationships.String()},
+		{heading: "IN-WORLD BELIEFS (may be wrong)", body: beliefs.String()},
+		{heading: "NEIGHBOURING REGIONS (identity only; you do not see their conditions)", body: neighbors.String()},
+		{heading: "REFERENCE DOCUMENTS (advisory, matched to current events)", body: refs.String()},
+	}}
+	return p.assembleWithin(maxBytes)
+}
+
+// refBody renders an advisory reference body with a display cap: a
+// single large document must not crowd out current events.
 func refBody(ref domain.ReferenceDoc) string {
 	body := strings.TrimSpace(ref.Body)
 	if len(body) > 1200 {
 		body = body[:1200] + "...[truncated]"
 	}
 	return body
+}
+
+// refFullText renders a binding reference without an extra cap:
+// binding rules are mandatory prompt material, protected by section
+// budgeting rather than silently cut.
+func refFullText(ref domain.ReferenceDoc) string {
+	return strings.TrimSpace(ref.Body)
 }
 
 // maxConsultDocs bounds one consult round: enough to ground a reply,
@@ -360,97 +474,125 @@ func RenderConsultSection(docs []domain.ReferenceDoc) string {
 	return b.String()
 }
 
+// orchestratorFooter closes every adjudication prompt.
+const orchestratorFooter = "Produce the single shared history for this step. Reply with the JSON object only."
+
 // RenderOrchestratorPrompt builds the adjudication context: everything,
 // clearly separated into proposals, interactions, and canonical state.
+// Directives and binding references are mandatory; the rest is
+// included under the byte ceiling in priority order.
 func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Snapshot,
 	proposals map[string][]domain.PropEvent, interactions []Interaction, maxBytes int) string {
-	var b strings.Builder
+	var hb strings.Builder
 	date := stepDateLabel(meta, currentStep+1)
-	fmt.Fprintf(&b, "WORLD: %s. Step about to begin: %d (%s). Current clock: %d.\n\n",
+	fmt.Fprintf(&hb, "WORLD: %s. Step about to begin: %d (%s). Current clock: %d.\n\n",
 		meta.WorldName, currentStep+1, date, currentStep)
 
-	writeSection(&b, "REGIONS", func() {
-		for id, r := range snap.Regions {
-			fmt.Fprintf(&b, "- %s %q [%s] %s\n", id, r.Name, r.Status, jsonCompact(r.Attrs))
+	var regions strings.Builder
+	for _, id := range sortedIDs(mapKeys(snap.Regions)) {
+		r := snap.Regions[id]
+		fmt.Fprintf(&regions, "- %s %q [%s] %s\n", id, r.Name, r.Status, jsonCompact(r.Attrs))
+	}
+	var connections strings.Builder
+	for _, c := range snap.Connections {
+		fmt.Fprintf(&connections, "- %s <-> %s (%d days)\n", c.A, c.B, c.TravelDay)
+	}
+	var entities strings.Builder
+	for _, id := range sortedIDs(mapKeys(snap.Entities)) {
+		e := snap.Entities[id]
+		fmt.Fprintf(&entities, "- %s %q kind=%s region=%s status=%s %s\n",
+			id, e.Name, e.Kind, e.RegionID, e.Status, jsonCompact(e.Attrs))
+	}
+	var relationships strings.Builder
+	for _, id := range sortedIDs(mapKeys(snap.Relationships)) {
+		r := snap.Relationships[id]
+		fmt.Fprintf(&relationships, "- %s %s -> %s kind=%s status=%s %s\n",
+			r.ID, r.SourceID, r.TargetID, r.Kind, r.Status, jsonCompact(r.Attrs))
+	}
+	var directives strings.Builder
+	for _, id := range sortedIDs(mapKeys(snap.Directives)) {
+		d := snap.Directives[id]
+		kind := "soft"
+		if d.Hard {
+			kind = "hard"
 		}
-	})
-	writeSection(&b, "CONNECTIONS", func() {
-		for _, c := range snap.Connections {
-			fmt.Fprintf(&b, "- %s <-> %s (%d days)\n", c.A, c.B, c.TravelDay)
+		fmt.Fprintf(&directives, "- %s [%s/%s]: %s\n", d.ID, kind, d.Status, d.Text)
+	}
+	var bindings strings.Builder
+	for _, ref := range snap.WorldRefs {
+		if !ref.Binding {
+			continue
 		}
-	})
-	writeSection(&b, "ENTITIES (canonical; proposals may contradict them — you adjudicate)", func() {
-		ids := make([]string, 0, len(snap.Entities))
-		for id := range snap.Entities {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			e := snap.Entities[domain.ID(id)]
-			fmt.Fprintf(&b, "- %s %q kind=%s region=%s status=%s %s\n",
-				id, e.Name, e.Kind, e.RegionID, e.Status, jsonCompact(e.Attrs))
-		}
-	})
-	writeSection(&b, "RELATIONSHIPS (canonical)", func() {
-		for _, r := range snap.Relationships {
-			fmt.Fprintf(&b, "- %s %s -> %s kind=%s status=%s %s\n",
-				r.ID, r.SourceID, r.TargetID, r.Kind, r.Status, jsonCompact(r.Attrs))
-		}
-	})
-	writeSection(&b, "DIRECTIVES", func() {
-		for _, d := range snap.Directives {
-			kind := "soft"
-			if d.Hard {
-				kind = "hard"
-			}
-			fmt.Fprintf(&b, "- %s [%s/%s]: %s\n", d.ID, kind, d.Status, d.Text)
-		}
-	})
-	writeSection(&b, "BINDING REFERENCES (world rules: adjudicate against these)", func() {
-		for _, ref := range snap.WorldRefs {
+		fmt.Fprintf(&bindings, "- %s (world): %s\n%s\n", ref.ID, ref.Title, refFullText(ref))
+	}
+	for _, id := range sortedStrings(mapKeys(snap.RegionRefs)) {
+		for _, ref := range snap.RegionRefs[domain.ID(id)] {
 			if !ref.Binding {
 				continue
 			}
-			fmt.Fprintf(&b, "- %s (world): %s\n%s\n", ref.ID, ref.Title, refBody(ref))
+			fmt.Fprintf(&bindings, "- %s (region %s): %s\n%s\n", ref.ID, id, ref.Title, refFullText(ref))
 		}
-		var regionIDs []string
-		for id := range snap.RegionRefs {
-			regionIDs = append(regionIDs, id)
-		}
-		sort.Strings(regionIDs)
-		for _, id := range regionIDs {
-			for _, ref := range snap.RegionRefs[id] {
-				if !ref.Binding {
-					continue
-				}
-				fmt.Fprintf(&b, "- %s (region %s): %s\n%s\n", ref.ID, id, ref.Title, refBody(ref))
-			}
-		}
-	})
-	writeSection(&b, "RECENT CANONICAL EVENTS", func() {
-		for _, ev := range snap.RecentEvents {
-			fmt.Fprintf(&b, "- %s step %d [%s] %s: %s\n", ev.ID, ev.Step, ev.Type, ev.Title, ev.Prose)
-		}
-	})
-	writeSection(&b, "PROPOSALS (independent; nothing here is committed)", func() {
-		for author, evs := range proposals {
-			for i, ev := range evs {
-				fmt.Fprintf(&b, "- [%s #%d] %s: %s | causes=%s changes=%s entities=%s delivery=%s\n",
-					author, i, ev.Title, ev.Prose, jsonCompact(ev.Causes), jsonCompact(ev.Changes),
-					jsonCompact(ev.AffectsEntities), jsonCompact(ev.Delivery))
-			}
-		}
-	})
-	writeSection(&b, "DETECTED INTERACTIONS (structural; semantic conflicts may exist beyond this list)", func() {
-		for _, in := range interactions {
-			fmt.Fprintf(&b, "- %s: %s among %s\n", in.Kind, strings.Join(in.Objects, ", "), strings.Join(in.Authors, ", "))
-		}
-	})
-	b.WriteString("\nProduce the single shared history for this step. Reply with the JSON object only.")
-	out := b.String()
-	if maxBytes > 0 && len(out) > maxBytes {
-		out = out[:maxBytes] + "\n...[context truncated]\nProduce the single shared history for this step. Reply with the JSON object only."
 	}
+	var recent strings.Builder
+	for _, ev := range snap.RecentEvents {
+		fmt.Fprintf(&recent, "- %s step %d [%s] %s: %s\n", ev.ID, ev.Step, ev.Type, ev.Title, ev.Prose)
+	}
+	var proposalsSb strings.Builder
+	authors := make([]string, 0, len(proposals))
+	for author := range proposals {
+		authors = append(authors, author)
+	}
+	sort.Strings(authors)
+	for _, author := range authors {
+		for i, ev := range proposals[author] {
+			fmt.Fprintf(&proposalsSb, "- [%s #%d] %s: %s | causes=%s changes=%s entities=%s delivery=%s\n",
+				author, i, ev.Title, ev.Prose, jsonCompact(ev.Causes), jsonCompact(ev.Changes),
+				jsonCompact(ev.AffectsEntities), jsonCompact(ev.Delivery))
+		}
+	}
+	var interactionsSb strings.Builder
+	for _, in := range interactions {
+		fmt.Fprintf(&interactionsSb, "- %s: %s among %s\n", in.Kind, strings.Join(in.Objects, ", "), strings.Join(in.Authors, ", "))
+	}
+
+	p := promptSpec{head: hb.String(), footer: "\n" + orchestratorFooter, sections: []promptSection{
+		// Mandatory: the user's direction and the world's rules are
+		// what adjudication is against.
+		{heading: "DIRECTIVES", body: directives.String(), mandatory: true},
+		{heading: "BINDING REFERENCES (world rules: adjudicate against these)", body: bindings.String(), mandatory: true},
+		// The decision material itself outranks reference state.
+		{heading: "PROPOSALS (independent; nothing here is committed)", body: proposalsSb.String()},
+		{heading: "DETECTED INTERACTIONS (structural; semantic conflicts may exist beyond this list)", body: interactionsSb.String()},
+		{heading: "RECENT CANONICAL EVENTS", body: recent.String()},
+		{heading: "REGIONS", body: regions.String()},
+		{heading: "ENTITIES (canonical; proposals may contradict them — you adjudicate)", body: entities.String()},
+		{heading: "RELATIONSHIPS (canonical)", body: relationships.String()},
+		{heading: "CONNECTIONS", body: connections.String()},
+	}}
+	return p.assembleWithin(maxBytes)
+}
+
+// mapKeys lists map keys for the sorting helpers, which make rendered
+// prompts stable between runs.
+func mapKeys[V any](m map[domain.ID]V) []domain.ID {
+	keys := make([]domain.ID, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func sortedIDs(keys []domain.ID) []domain.ID {
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func sortedStrings(keys []domain.ID) []string {
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		out[i] = string(k)
+	}
+	sort.Strings(out)
 	return out
 }
 

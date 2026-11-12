@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"path/filepath"
 	"strings"
@@ -451,4 +452,82 @@ func snapHasRegionEvent(s *store.Snapshot, region string, id domain.ID) bool {
 		}
 	}
 	return false
+}
+
+func TestBindingRuleBeyondByteCapSurvives(t *testing.T) {
+	meta := domain.Meta{WorldName: "W", StartDate: "1000-01-01", StepDays: 7}
+	// A binding rule whose critical clause sits well past byte 1,200:
+	// the old flat cap cut exactly such rules out of the prompt.
+	rule := strings.Repeat("filler ", 400) + "NO IRON MAY CROSS THE FORD."
+	v := &knowledge.LogographerView{
+		Region: &domain.Region{ID: "king-a", Name: "Kingdom A", Status: "active"},
+		Bindings: []domain.ReferenceDoc{
+			{ID: "ref-law", Scope: "world", Title: "Ford Law", Binding: true, Body: rule},
+		},
+		Beliefs:  []domain.Belief{{ID: "bl-1", RegionID: "king-a", Modality: "belief", Statement: strings.Repeat("noise ", 500)}},
+		Entities: []*domain.Entity{{ID: "e-1", Kind: "person", Name: strings.Repeat("name ", 300), RegionID: "king-a", Status: "active"}},
+	}
+	p := RenderLogographerPrompt(meta, 0, v, 4096)
+	if !strings.Contains(p, "NO IRON MAY CROSS THE FORD.") {
+		t.Fatal("binding rule beyond byte 1200 was cut from the prompt")
+	}
+	// Tight budget: optional sections drop first, the binding rule stays.
+	p = RenderLogographerPrompt(meta, 0, v, 4000)
+	if !strings.Contains(p, "NO IRON MAY CROSS THE FORD.") {
+		t.Fatal("binding rule dropped under budget pressure")
+	}
+	if strings.Contains(p, "noise") || strings.Contains(p, "name name") {
+		t.Fatal("optional sections should have been dropped first")
+	}
+	// Absurd budget: loud diagnostic, not silent amnesia.
+	p = RenderLogographerPrompt(meta, 0, v, 100)
+	if !strings.Contains(p, "cannot fit the mandatory") {
+		t.Fatal("missing mandatory-overflow diagnostic")
+	}
+}
+
+func TestDeliveredReportsBoundedNewestFirst(t *testing.T) {
+	meta := domain.Meta{WorldName: "W", StartDate: "1000-01-01", StepDays: 7}
+	v := &knowledge.LogographerView{
+		Region:        &domain.Region{ID: "king-a", Name: "Kingdom A", Status: "active"},
+		ReportsHidden: 5,
+	}
+	v.Reports = append(v.Reports, knowledge.ReportNote{
+		EventID: "evt-999999", Title: "Fresh critical news", EventStep: 99, DeliveredStep: 140,
+	})
+	for i := 11; i >= 0; i-- {
+		v.Reports = append(v.Reports, knowledge.ReportNote{
+			EventID: fmt.Sprintf("evt-%06d", i), Title: fmt.Sprintf("Old %d", i),
+			EventStep: i, DeliveredStep: 100 + i,
+		})
+	}
+	p := RenderLogographerPrompt(meta, 140, v, 0)
+	i := strings.Index(p, "Fresh critical news")
+	if i < 0 {
+		t.Fatal("newest report missing")
+	}
+	if j := strings.Index(p, "Old 11"); j >= 0 && j < i {
+		t.Errorf("older report (%d) precedes newest (%d)", j, i)
+	}
+	if !strings.Contains(p, "5 older reports omitted") {
+		t.Fatal("hidden-report count missing from heading")
+	}
+}
+
+func TestFitPromptCeilingAfterAdditions(t *testing.T) {
+	base := strings.Repeat("context line\n", 100)
+	extra := "\nTHE ORCHESTRATOR ASKS YOU: why?\n"
+	got := FitPrompt(base, extra, 600)
+	if len(got) > 600 {
+		t.Fatalf("ceiling not enforced after additions: %d bytes", len(got))
+	}
+	if !strings.Contains(got, "why?") {
+		t.Fatal("late addition was cut instead of the base prompt")
+	}
+	if !strings.Contains(got, "section cut by byte ceiling") {
+		t.Fatal("truncation not marked")
+	}
+	if len(base)+len(extra) <= 600 {
+		t.Fatal("fixture must exceed the ceiling")
+	}
 }

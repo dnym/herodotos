@@ -32,7 +32,8 @@ type LogographerView struct {
 	Region        *domain.Region
 	Memory        *domain.Memory
 	Beliefs       []domain.Belief
-	Reports       []ReportNote // news from other regions, already delivered
+	Reports       []ReportNote // newest first, capped (see maxDeliveredReports)
+	ReportsHidden int          // older delivered reports left out of the prompt
 	Entities      []*domain.Entity
 	Relationships []*domain.Relationship // among visible entities
 	Directives    []domain.Directive
@@ -72,6 +73,15 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 	for _, d := range s.Directives {
 		v.Directives = append(v.Directives, *d)
 	}
+	sort.Slice(v.Directives, func(i, j int) bool { return v.Directives[i].ID < v.Directives[j].ID })
+
+	// Delivered reports arrive oldest-first from the snapshot. The
+	// prompt shows the freshest news first and bounds the set: old
+	// news is already woven into memory and recent events, and
+	// unbounded accumulation would crowd out current decisions.
+	// Hidden reports remain citable: their events are canonical and
+	// stay valid causes.
+	notes := make([]ReportNote, 0, len(s.DeliveredReports[regionID]))
 	for _, rep := range s.DeliveredReports[regionID] {
 		note := ReportNote{EventID: rep.EventID, DeliveredStep: rep.DeliveredStep}
 		if ev, err := lookup.GetEvent(ctx, rep.EventID); err == nil {
@@ -79,8 +89,20 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 		} else {
 			note.Title = rep.EventID
 		}
-		v.Reports = append(v.Reports, note)
+		notes = append(notes, note)
 	}
+	sort.SliceStable(notes, func(i, j int) bool {
+		if notes[i].DeliveredStep != notes[j].DeliveredStep {
+			return notes[i].DeliveredStep > notes[j].DeliveredStep
+		}
+		return notes[i].EventID > notes[j].EventID
+	})
+	if len(notes) > maxDeliveredReports {
+		v.ReportsHidden = len(notes) - maxDeliveredReports
+		notes = notes[:maxDeliveredReports]
+	}
+	v.Reports = notes
+
 	for _, ev := range s.RecentEvents {
 		for _, rid := range ev.RegionIDs {
 			if rid == regionID {
@@ -97,6 +119,15 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 			v.AdjacentIDs = append(v.AdjacentIDs, c.A)
 		}
 	}
+	sort.Slice(v.Entities, func(i, j int) bool { return v.Entities[i].ID < v.Entities[j].ID })
+	sort.Slice(v.Relationships, func(i, j int) bool { return v.Relationships[i].ID < v.Relationships[j].ID })
+	sort.Slice(v.Beliefs, func(i, j int) bool { return v.Beliefs[i].ID < v.Beliefs[j].ID })
+	sort.Slice(v.RecentEvents, func(i, j int) bool {
+		if v.RecentEvents[i].Step != v.RecentEvents[j].Step {
+			return v.RecentEvents[i].Step > v.RecentEvents[j].Step
+		}
+		return v.RecentEvents[i].ID > v.RecentEvents[j].ID
+	})
 	return v, nil
 }
 
@@ -169,6 +200,11 @@ func classifyReferences(v *LogographerView, s *store.Snapshot, regionID domain.I
 
 // maxRetrieved bounds how many advisory bodies one prompt may carry.
 const maxRetrieved = 3
+
+// maxDeliveredReports bounds how many delivered reports one prompt
+// expands. Reports keep their canonical event ids, so omitted older
+// ones remain known history the agent can still cite.
+const maxDeliveredReports = 12
 
 func regionContextText(v *LogographerView) []string {
 	texts := []string{string(v.Region.ID), v.Region.Name}

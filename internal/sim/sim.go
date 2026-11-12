@@ -411,18 +411,19 @@ type stepRun struct {
 
 func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *knowledge.LogographerView, extra string, premise []domain.Event) (*agents.LogographerReply, error) {
 	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view, s.b.MaxPromptBytes)
+	add := ""
 	if extra != "" {
-		prompt += "\nTHE ORCHESTRATOR ASKS YOU: " + extra + "\n"
+		add += "\nTHE ORCHESTRATOR ASKS YOU: " + extra + "\n"
 		if len(premise) > 0 {
-			prompt += "The question rests on events you can see in your own history or delivered reports:\n"
+			add += "The question rests on events you can see in your own history or delivered reports:\n"
 			for _, ev := range premise {
-				prompt += fmt.Sprintf("- %s step %d: %s: %s\n", ev.ID, ev.Step, ev.Title, ev.Prose)
+				add += fmt.Sprintf("- %s step %d: %s: %s\n", ev.ID, ev.Step, ev.Title, ev.Prose)
 			}
 		}
-		prompt += "Answer with the same JSON format, reacting only within your authority.\n"
+		add += "Answer with the same JSON format, reacting only within your authority.\n"
 	}
 	var reply *agents.LogographerReply
-	err := retryParse(s, ctx, "logographer:"+regionID, agents.SystemLogographer(), prompt, 0.8, s.b.MaxOutputTokens,
+	err := retryParse(s, ctx, "logographer:"+regionID, agents.SystemLogographer(), prompt, add, 0.8, s.b.MaxOutputTokens,
 		func(text string) error {
 			r, err := agents.ParseLogographerReply(text)
 			if err != nil {
@@ -449,10 +450,10 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 
 func (s *stepRun) askConsult(ctx context.Context, regionID string, view *knowledge.LogographerView, docs []domain.ReferenceDoc) (*agents.LogographerReply, error) {
 	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view, s.b.MaxPromptBytes)
-	prompt += agents.RenderConsultSection(docs) +
+	add := agents.RenderConsultSection(docs) +
 		"\nThese are the reference documents you asked for. Give your final answer now in the same JSON format; no further documents are available this step.\n"
 	var reply *agents.LogographerReply
-	err := retryParse(s, ctx, "logographer:"+regionID+":consult", agents.SystemLogographer(), prompt, 0.8, s.b.MaxOutputTokens,
+	err := retryParse(s, ctx, "logographer:"+regionID+":consult", agents.SystemLogographer(), prompt, add, 0.8, s.b.MaxOutputTokens,
 		func(text string) error {
 			r, err := agents.ParseLogographerReply(text)
 			if err != nil {
@@ -483,7 +484,7 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt string, reactionsO
 	if maxTok <= 0 {
 		maxTok = 2 * s.b.MaxOutputTokens
 	}
-	err := retryParse(s, ctx, "orchestrator", agents.SystemOrchestrator(), prompt, 0.3, maxTok,
+	err := retryParse(s, ctx, "orchestrator", agents.SystemOrchestrator(), prompt, "", 0.3, maxTok,
 		func(text string) error {
 			r, err := agents.ParseOrchestratorReply(text)
 			if err != nil {
@@ -522,11 +523,14 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt string, reactionsO
 
 // retryParse calls the model and feeds structured failures back for a
 // bounded number of correction rounds.
-func retryParse(s *stepRun, ctx context.Context, role, system, prompt string, temp float64, maxTokens int, validate func(string) error) error {
+func retryParse(s *stepRun, ctx context.Context, role, system, base, add string, temp float64, maxTokens int, validate func(string) error) error {
 	correction := ""
 	var lastErr error
 	for tries := 0; tries <= s.b.MaxCorrectionRetries; tries++ {
-		text, truncated, err := s.call(ctx, role, system, prompt+correction, temp, maxTokens)
+		// The byte ceiling is applied after every addition — late
+		// extras and correction feedback included.
+		prompt := agents.FitPrompt(base, add+correction, s.b.MaxPromptBytes)
+		text, truncated, err := s.call(ctx, role, system, prompt, temp, maxTokens)
 		if err != nil {
 			return err
 		}
