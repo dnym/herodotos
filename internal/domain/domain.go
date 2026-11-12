@@ -107,6 +107,7 @@ type PropEvent struct {
 	Type            string         `json:"type"`
 	Title           string         `json:"title"`
 	Prose           string         `json:"prose"`
+	Origin          ID             `json:"origin,omitempty"` // authoring region, set by the engine
 	Causes          []ID           `json:"causes,omitempty"`
 	Changes         []Change       `json:"changes,omitempty"`
 	AffectsEntities []ID           `json:"affects_entities,omitempty"`
