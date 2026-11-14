@@ -239,10 +239,23 @@ type panelData struct {
 	RunningID  string // attempt id of the step in flight, for the live viewer
 	LastResult string
 	LastErr    string
+	// Clock is the committed step now; SeenClock the step the
+	// surrounding page was rendered at. When they differ, the page
+	// around the panel shows stale history and says so.
+	Clock     int
+	SeenClock int
+	MaxSteps  int // upper bound of the bounded-run field
 }
 
+// maxRunSteps bounds one bounded run started from the panel, so a typo
+// cannot start an accidental marathon of model calls.
+const maxRunSteps = 100
+
 func (s *Server) panelData(ctx context.Context) panelData {
-	pd := panelData{HasEngine: s.Engine != nil}
+	pd := panelData{HasEngine: s.Engine != nil, MaxSteps: maxRunSteps}
+	if m, err := s.DB.GetMeta(ctx); err == nil {
+		pd.Clock, pd.SeenClock = m.ClockStep, m.ClockStep
+	}
 	if reason, paused, err := s.DB.WorldPause(ctx); err == nil && paused {
 		pd.WorldPause = reason
 	}
@@ -263,7 +276,11 @@ func (s *Server) panelData(ctx context.Context) panelData {
 
 func (s *Server) partialRunPanel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, "runpanel", s.panelData(r.Context())); err != nil {
+	pd := s.panelData(r.Context())
+	if seen, err := strconv.Atoi(r.URL.Query().Get("seen")); err == nil && seen >= 0 {
+		pd.SeenClock = seen
+	}
+	if err := s.tmpl.ExecuteTemplate(w, "runpanel", pd); err != nil {
 		fmt.Println("web: render runpanel:", err)
 	}
 }
@@ -321,7 +338,10 @@ func stepsFormValue(v string) int {
 	case "all":
 		return -1
 	}
-	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+		if n > maxRunSteps {
+			return maxRunSteps
+		}
 		return n
 	}
 	return 1

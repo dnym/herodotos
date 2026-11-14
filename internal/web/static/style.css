@@ -280,3 +280,5 @@ pre.faildetail { white-space: pre-wrap; border-left: 3px solid var(--bad); backg
 .outcome-rejected, .outcome-unaccounted { color: var(--bad); }
 td.settings { font-family: var(--mono); font-size: .75rem; white-space: nowrap; }
 .status-withdrawn { color: var(--muted); text-decoration: line-through; }
+input.stepcount { width: 4.5em; }
+.flash.newstep { border-color: var(--bronze); }

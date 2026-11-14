@@ -834,3 +834,26 @@ func TestFailedAttemptIsSelfContained(t *testing.T) {
 		}
 	}
 }
+
+// The idle panel offers a bounded run, and once steps commit after the
+// page loaded it says the surrounding history is stale.
+func TestPanelBoundedRunAndStaleNotice(t *testing.T) {
+	s := newTestServer(t, true)
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+	if body := get(t, ts, "/", http.StatusOK); !strings.Contains(body, `name="steps" value="3"`) {
+		t.Fatal("bounded run field missing")
+	}
+	if got := stepsFormValue("100000"); got != maxRunSteps {
+		t.Fatalf("bounded run not capped: %d", got)
+	}
+	if _, err := s.Engine.RunStep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if frag := hxGet(t, ts, "/run/panel?seen=0"); !strings.Contains(frag, "1 new step(s) committed") {
+		t.Fatalf("stale notice missing:\n%s", frag)
+	}
+	if frag := hxGet(t, ts, "/run/panel?seen=1"); strings.Contains(frag, "new step(s) committed") {
+		t.Fatal("stale notice shown for a current page")
+	}
+}

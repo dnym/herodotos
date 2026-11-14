@@ -1,6 +1,6 @@
 {{define "runpanel"}}
 {{if .WorldPause}}
-<div class="runpanel paused" hx-get="/run/panel" hx-trigger="every 4s" hx-swap="outerHTML">
+<div class="runpanel paused" hx-get="/run/panel?seen={{.SeenClock}}" hx-trigger="every 4s" hx-swap="outerHTML">
   <p class="flash err">The world is paused: {{.WorldPause}}</p>
   <p class="hint">No step will commit until the conflict is resolved — adjust the directive
   below, then resume. History is untouched.</p>
@@ -10,7 +10,7 @@
   </form>
 </div>
 {{else if .Active}}
-<div class="runpanel running" hx-get="/run/panel" hx-trigger="every 4s" hx-swap="outerHTML">
+<div class="runpanel running" hx-get="/run/panel?seen={{.SeenClock}}" hx-trigger="every 4s" hx-swap="outerHTML">
   <p class="runstatus"><span class="pulse"></span>
     Run in progress — {{.StepsDone}} step(s) committed so far.
     Closing this page does not stop it.</p>
@@ -32,10 +32,19 @@
 (or <code>--scripted</code>) to advance the world from here</p>
 {{else}}
 <div class="runpanel">
+  {{if gt .Clock .SeenClock}}
+  <p class="flash newstep">{{sub .Clock .SeenClock}} new step(s) committed since this page loaded &mdash;
+    <a href="/">show the current world</a></p>
+  {{end}}
   <form method="post" action="/run/start" class="stepform">
     <input type="hidden" name="steps" value="1">
     <button type="submit">advance one step</button>
     <span class="hint">runs on the server; a live step takes minutes and survives closing this tab</span>
+  </form>
+  <form method="post" action="/run/start" class="stepform">
+    <label>run <input type="number" name="steps" value="3" min="1" max="{{.MaxSteps}}" class="stepcount"> steps</label>
+    <button type="submit" class="secondary">run bounded</button>
+    <span class="hint">at most {{.MaxSteps}}; stops early on failure or pause</span>
   </form>
   <form method="post" action="/run/start" class="stepform">
     <input type="hidden" name="steps" value="all">
