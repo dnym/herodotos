@@ -35,6 +35,27 @@ web layer and the CLI are both thin callers of `sim.Engine.RunStep`.
   earliest-delivery step derived from travel days; a report is
   invisible to its recipient region before that step, and one region's
   private information never enters another region's view.
+- Geography is not access. An event's `region_ids` list where it is
+  relevant (the origin and every region whose state or entities it
+  touches) and drive filtering and inspection only. Agent access comes
+  from two persistent records: `observations` (the origin, plus the
+  regions the final event declares as `observers`, i.e. whose people
+  witness it as it happens) and delivered `reports`. Both may carry a
+  limited `account` that replaces the event's title and prose for
+  that region, so a covert act's target can be affected now, told a
+  partial story later, and never shown the private canonical prose.
+  Recent-history context, report notes, cause validation, reaction
+  premises, and history recall all apply this one policy. An event
+  with no regional origin must name at least one observer. Worlds
+  created before this rule existed keep their old access: the
+  migration records every listed region as an observer of the events
+  already committed.
+- The access record outlives the prompt's eight-step recent window: an
+  old event stays a valid cause for regions that witnessed or received
+  it, and a logographer may ask to `recall` up to three event ids or
+  keyword queries, answered in the same single follow-up call as
+  `consult` from the region's own record (at most eight entries,
+  matched against the version the region knows).
 - Failed attempts keep full diagnostics (proposals, model calls,
   tokens, errors) but produce zero canonical changes and never move
   the clock. Commitment is guarded by a base revision; a stale

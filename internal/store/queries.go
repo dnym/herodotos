@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -55,6 +56,55 @@ func (d *DB) GetEvent(ctx context.Context, id domain.ID) (domain.Event, error) {
 	row := d.sqlDB.QueryRowContext(ctx,
 		`SELECT id, step, type, title, prose, region_ids, entity_ids, cause_ids FROM events WHERE id = ?`, id)
 	return scanEvent(row)
+}
+
+// HistoryNote is one event a region may know, in the version it knows:
+// Account is its limited account, or empty when it knows the full prose.
+type HistoryNote struct {
+	Event   domain.Event
+	Account string
+	Via     string // observed, report
+}
+
+// RegionHistory lists every event the region's agent may know at the
+// start of the given step — witnessed directly, or carried by a report
+// due by then — oldest first. It is the persistent access record that
+// outlives the prompt's recent window. A report and an observation of
+// the same event collapse to the observation (it saw for itself).
+func (d *DB) RegionHistory(ctx context.Context, regionID domain.ID, atStep int) ([]HistoryNote, error) {
+	rows, err := d.sqlDB.QueryContext(ctx,
+		`SELECT e.id, e.step, e.type, e.title, e.prose, e.region_ids, e.entity_ids, e.cause_ids,
+		        a.account, a.via
+		 FROM (
+		   SELECT event_id, COALESCE(account, '') AS account, 'observed' AS via, 0 AS pri
+		     FROM observations WHERE region_id = ?
+		   UNION ALL
+		   SELECT event_id, COALESCE(account, ''), 'report', 1
+		     FROM reports WHERE target_region_id = ? AND (delivered_step IS NOT NULL OR earliest_step <= ?)
+		 ) a JOIN events e ON e.id = a.event_id
+		 ORDER BY e.step, e.id, a.pri`, regionID, regionID, atStep)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HistoryNote
+	seen := map[domain.ID]bool{}
+	for rows.Next() {
+		var ev domain.Event
+		var regions, entities, causes, account, via string
+		if err := rows.Scan(&ev.ID, &ev.Step, &ev.Type, &ev.Title, &ev.Prose, &regions, &entities, &causes, &account, &via); err != nil {
+			return nil, err
+		}
+		if seen[ev.ID] {
+			continue
+		}
+		seen[ev.ID] = true
+		json.Unmarshal([]byte(regions), &ev.RegionIDs)
+		json.Unmarshal([]byte(entities), &ev.EntityIDs)
+		json.Unmarshal([]byte(causes), &ev.CauseIDs)
+		out = append(out, HistoryNote{Event: ev, Account: account, Via: via})
+	}
+	return out, rows.Err()
 }
 
 // ListRegions returns all regions in stable order.

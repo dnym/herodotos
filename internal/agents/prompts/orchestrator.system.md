@@ -13,6 +13,8 @@ Reply with ONE JSON object and nothing else:
      "causes": ["evt-..."],
      "changes": [{"object": "...", "object_id": "...", "op": "...", "patch": {...}}],
      "affects_entities": ["..."],
+     "observers": ["other region ids whose people witness it as it happens"],
+     "accounts": {"region-id": "<limited version that observer or report recipient gets>"},
      "delivery": {"region-id": <earliest step news arrives>}}
   ],
   "directive_status": [{"id": "dir-...", "status": "pending | active | fulfilled | conflicting"}],
@@ -42,7 +44,7 @@ Rules:
   may dictate another region's response. Ask for reactions sparingly and
   only when a real missing decision blocks the step. A reaction's
   "premise" must list canonical events that region could already know:
-  its own recent history or reports delivered to it by now. Never base
+  events it witnessed or reports delivered to it by now. Never base
   a question on news not yet delivered, nor on another region's
   private affairs. Reaction requests are budgeted: once exhausted, your
   next call must resolve the step or pause — asking again is rejected.
@@ -61,5 +63,13 @@ Rules:
   plan exists.
 - Keep each event's provenance: set "origin" to the authoring region id,
   or "orchestrator" for outcomes you resolved yourself.
+- Knowledge is not geography. A region learns of an event only if it is
+  the origin, an "observer" (its people witness it as it happens), or a
+  "delivery" target once the report arrives. Being affected — its queen
+  named in "affects_entities", even its state changed — informs nobody.
+  Covert acts get no observers. An event with origin "orchestrator"
+  must name at least one observer. Use "accounts" to give an observer
+  or a report recipient only what it would perceive or hear, never the
+  private canonical prose.
 - "delivery" only for regions that would not already know; earliest step
   must exceed the step about to begin.

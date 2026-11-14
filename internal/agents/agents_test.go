@@ -84,10 +84,11 @@ func TestValidateLogographerProposal(t *testing.T) {
 	if !strings.Contains(err.Error(), "active or ended") {
 		t.Errorf("rejection must teach the vocabulary: %v", err)
 	}
+	relBad.Origin = "king-a"
 	if err := pv.ValidateFinalEvent(relBad); err == nil {
 		t.Fatal("out-of-vocabulary status accepted in orchestrator output")
 	}
-	relGood := &domain.PropEvent{Title: "t", Prose: "p", Changes: []domain.Change{{Object: "relationship", ObjectID: "rel-1", Op: "set_status", Patch: map[string]any{"status": "ended"}}}}
+	relGood := &domain.PropEvent{Title: "t", Prose: "p", Origin: "king-a", Changes: []domain.Change{{Object: "relationship", ObjectID: "rel-1", Op: "set_status", Patch: map[string]any{"status": "ended"}}}}
 	if err := pv.ValidateLogographerProposal("king-a", relGood); err != nil {
 		t.Errorf("valid status rejected: %v", err)
 	}
@@ -113,6 +114,7 @@ func TestValidateLogographerProposal(t *testing.T) {
 	if err := pv.ValidateLogographerProposal("king-a", ghostDest); err == nil {
 		t.Fatal("move to unknown region accepted")
 	}
+	ghostDest.Origin = "king-a"
 	if err := pv.ValidateFinalEvent(ghostDest); err == nil {
 		t.Fatal("move to unknown region accepted in final event")
 	}
@@ -313,6 +315,10 @@ func TestReactionPremiseVisibility(t *testing.T) {
 		DeliveredReports: map[domain.ID][]domain.Report{
 			"prin-b": {{EventID: "evt-000002", EarliestStep: 2, DeliveredStep: 2}},
 		},
+		Observed: map[domain.ID]map[domain.ID]string{
+			"king-a": {"evt-000001": "", "evt-000002": ""},
+			"prin-b": {"evt-000001": ""},
+		},
 	}
 	pv := &ProposalValidator{Snap: snap, CurrentStep: 2}
 	if err := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000001"}}); err != nil {
@@ -430,7 +436,7 @@ func TestLateReportRevivesOldEventAsCause(t *testing.T) {
 	}
 	orch := &ProposalValidator{Snap: snap, CurrentStep: 10, DB: db, AllEvents: true}
 	fin := &domain.PropEvent{
-		Type: "development", Title: "t", Prose: "p",
+		Type: "development", Title: "t", Prose: "p", Origin: "king-a",
 		Causes: []domain.ID{"evt-000001"},
 	}
 	if err := orch.ValidateFinalEvent(fin); err != nil {

@@ -1,9 +1,12 @@
 // Package knowledge enforces the separation of canonical truth,
 // agent-accessible information, and in-world knowledge. Context views are
 // built under a visibility policy: a regional historian sees its own
-// region's canonical conditions, delivered reports, recorded beliefs,
-// memories, and scoped references — never another region's private
-// canonical state.
+// region's canonical conditions, the events its region witnessed
+// (observations), delivered reports, recorded beliefs, memories, and
+// scoped references — never another region's private canonical state.
+// Geography is not access: an event that affects a region's entities
+// is known there only through an observation or a delivered report, and
+// then only in the account that observation or report carries.
 package knowledge
 
 import (
@@ -40,7 +43,7 @@ type LogographerView struct {
 	Bindings      []domain.ReferenceDoc // always shown in full: world rules
 	Retrieved     []domain.ReferenceDoc // bodies auto-loaded by keyword match
 	Catalog       []domain.ReferenceDoc // id/title/description only: ask to consult
-	RecentEvents  []domain.Event        // canonical events involving this region
+	RecentEvents  []domain.Event        // recent events this region witnessed, as it knows them
 	AdjacentIDs   []domain.ID           // neighbor identity only, no conditions
 }
 
@@ -85,6 +88,7 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 	for _, rep := range s.DeliveredReports[regionID] {
 		note := ReportNote{EventID: rep.EventID, DeliveredStep: rep.DeliveredStep}
 		if ev, err := lookup.GetEvent(ctx, rep.EventID); err == nil {
+			ev = AsKnown(ev, rep.Account)
 			note.Title, note.Prose, note.EventStep = ev.Title, ev.Prose, ev.Step
 		} else {
 			note.Title = rep.EventID
@@ -104,11 +108,8 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 	v.Reports = notes
 
 	for _, ev := range s.RecentEvents {
-		for _, rid := range ev.RegionIDs {
-			if rid == regionID {
-				v.RecentEvents = append(v.RecentEvents, ev)
-				break
-			}
+		if account, ok := s.Observed[regionID][ev.ID]; ok {
+			v.RecentEvents = append(v.RecentEvents, AsKnown(ev, account))
 		}
 	}
 	classifyReferences(v, s, regionID)
@@ -129,6 +130,69 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 		return v.RecentEvents[i].ID > v.RecentEvents[j].ID
 	})
 	return v, nil
+}
+
+// AsKnown returns the event as a region knows it. With a limited
+// account, the canonical title, type, and prose are replaced: a title
+// like "Plot against the queen" would otherwise disclose exactly what
+// the account withholds. Ids stay, so the event remains citable.
+func AsKnown(ev domain.Event, account string) domain.Event {
+	if account == "" {
+		return ev
+	}
+	ev.Type = "account"
+	ev.Title = "What your region learned"
+	ev.Prose = account
+	return ev
+}
+
+// maxRecallQueries and maxRecallResults bound one history lookup.
+const (
+	maxRecallQueries = 3
+	maxRecallResults = 8
+)
+
+// Recall answers a region's history lookup from its own access record:
+// each query is an event id (exact) or keywords matched against the
+// version of the event the region knows — never against canonical
+// prose it was not told. Newest matches first, bounded.
+func Recall(history []store.HistoryNote, queries []string) []domain.Event {
+	if len(queries) > maxRecallQueries {
+		queries = queries[:maxRecallQueries]
+	}
+	var out []domain.Event
+	seen := map[domain.ID]bool{}
+	for i := len(history) - 1; i >= 0 && len(out) < maxRecallResults; i-- {
+		known := AsKnown(history[i].Event, history[i].Account)
+		hay := strings.ToLower(known.Title + " " + known.Prose)
+		for _, q := range queries {
+			q = strings.TrimSpace(q)
+			if q == "" {
+				continue
+			}
+			match := q == string(known.ID)
+			if !match {
+				words := refKeywords(q)
+				match = len(words) > 0
+				for _, w := range words {
+					// Crude plural folding: "riots" finds "rioting".
+					if len(w) > 3 {
+						w = strings.TrimSuffix(w, "s")
+					}
+					if !strings.Contains(hay, w) {
+						match = false
+						break
+					}
+				}
+			}
+			if match && !seen[known.ID] {
+				seen[known.ID] = true
+				out = append(out, known)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // UnknownRegionError names a missing region.

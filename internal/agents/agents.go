@@ -51,6 +51,10 @@ type LogographerReply struct {
 	// Consult requests the full text of up to 3 cataloged reference
 	// documents; the engine answers with one bounded follow-up call.
 	Consult []string `json:"consult,omitempty"`
+	// Recall looks up the region's own older history: up to 3 event
+	// ids or keyword queries, answered in the same follow-up call from
+	// what the region witnessed or was told.
+	Recall []string `json:"recall,omitempty"`
 }
 
 // ReactionRequest is one request for a regional reaction. The premise
@@ -124,6 +128,14 @@ func ParseLogographerReply(text string) (*LogographerReply, error) {
 	}
 	if err := validateBeliefs(r.Beliefs); err != nil {
 		return nil, err
+	}
+	if len(r.Recall) > 3 {
+		return nil, fmt.Errorf("too many recall queries: %d (max 3)", len(r.Recall))
+	}
+	for _, q := range r.Recall {
+		if strings.TrimSpace(q) == "" || len(q) > 100 {
+			return nil, fmt.Errorf("recall queries must be non-empty and at most 100 characters")
+		}
 	}
 	return &r, nil
 }
@@ -394,7 +406,7 @@ func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.Log
 		{heading: "REFERENCE DOCUMENTS — BINDING (world rules: act within these)", body: bindings.String(), mandatory: true},
 		// Optional, most important first: what is happening now, then
 		// supporting background, then the reference catalogue.
-		{heading: "YOUR CANONICAL RECENT EVENTS", body: recent.String()},
+		{heading: "RECENT EVENTS YOUR REGION WITNESSED (canonical, as your region knows them)", body: recent.String()},
 		{heading: reportHeading, body: reports.String()},
 		{heading: "ENTITIES IN YOUR REGION", body: entities.String()},
 		{heading: "RELATIONSHIPS VISIBLE TO YOU", body: relationships.String()},
@@ -454,6 +466,7 @@ func ConsultDocs(requested []string, visible []domain.ReferenceDoc) []domain.Ref
 // ones: the agent asked for exactly this text.
 func RenderConsultSection(docs []domain.ReferenceDoc) string {
 	var b strings.Builder
+	b.WriteString("\n\n")
 	writeSection(&b, "REFERENCE DOCUMENTS YOU REQUESTED (full text)", func() {
 		for _, ref := range docs {
 			body := strings.TrimSpace(ref.Body)
@@ -461,6 +474,22 @@ func RenderConsultSection(docs []domain.ReferenceDoc) string {
 				body = body[:4000] + "...[truncated]"
 			}
 			fmt.Fprintf(&b, "- %s (%s): %s\n%s\n", ref.ID, ref.Scope, ref.Title, body)
+		}
+	})
+	return b.String()
+}
+
+// RenderRecallSection lists the region's own history entries a recall
+// query found, in the version the region knows.
+func RenderRecallSection(queries []string, events []domain.Event) string {
+	var b strings.Builder
+	b.WriteString("\n\n")
+	writeSection(&b, "YOUR HISTORY LOOKUP (queries: "+strings.Join(queries, "; ")+")", func() {
+		if len(events) == 0 {
+			b.WriteString("- nothing in your region's knowledge matches\n")
+		}
+		for _, ev := range events {
+			fmt.Fprintf(&b, "- %s step %d [%s] %s: %s\n", ev.ID, ev.Step, ev.Type, ev.Title, ev.Prose)
 		}
 	})
 	return b.String()
@@ -583,9 +612,9 @@ func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Sna
 	var proposalsSb strings.Builder
 	for _, it := range items {
 		ev := it.Event
-		fmt.Fprintf(&proposalsSb, "- %s [%s] %s: %s | causes=%s changes=%s entities=%s delivery=%s\n",
+		fmt.Fprintf(&proposalsSb, "- %s [%s] %s: %s | causes=%s changes=%s entities=%s observers=%s accounts=%s delivery=%s\n",
 			it.Ref, it.Author, ev.Title, ev.Prose, jsonCompact(ev.Causes), jsonCompact(ev.Changes),
-			jsonCompact(ev.AffectsEntities), jsonCompact(ev.Delivery))
+			jsonCompact(ev.AffectsEntities), jsonCompact(ev.Observers), jsonCompact(ev.Accounts), jsonCompact(ev.Delivery))
 	}
 	var interactionsSb strings.Builder
 	for _, in := range interactions {
@@ -765,7 +794,7 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 	}
 	for _, id := range ev.Causes {
 		if !pv.causeVisibleTo(authorRegion, id) {
-			return fmt.Errorf("cause %q is not in your knowledge: cite events from your own history or reports delivered to you", id)
+			return fmt.Errorf("cause %q is not in your knowledge: cite events your region witnessed or reports delivered to you", id)
 		}
 	}
 	for region, step := range ev.Delivery {
@@ -779,7 +808,7 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 			return fmt.Errorf("delivery step %d must be greater than %d", step, newStep)
 		}
 	}
-	return nil
+	return pv.checkAccess(authorRegion, ev)
 }
 
 // ValidateFinalEvent checks orchestrator output structurally. Cross-region
@@ -860,7 +889,14 @@ func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 			return fmt.Errorf("delivery step %d must be greater than %d", step, newStep)
 		}
 	}
-	return nil
+	origin := ev.Origin
+	if origin == "" || origin == "orchestrator" {
+		origin = ""
+		if len(ev.Observers) == 0 {
+			return fmt.Errorf("event %q has no regional origin, so it needs \"observers\": the regions whose people witness it (an unwitnessed event is known to no one until a report arrives)", ev.Title)
+		}
+	}
+	return pv.checkAccess(origin, ev)
 }
 
 func knownCause(s *store.Snapshot, id domain.ID) bool {
@@ -887,74 +923,61 @@ func (pv *ProposalValidator) causeExists(id domain.ID) bool {
 }
 
 // causeVisibleTo separates access from existence: a regional agent may
-// cite causes it could actually know — events in its own recent
-// history, or events delivered to it by report, whenever the report
-// surfaced them.
+// cite causes it could actually know — events its region witnessed, or
+// events delivered to it by report — however old they are.
 func (pv *ProposalValidator) causeVisibleTo(regionID domain.ID, id domain.ID) bool {
 	if pv.AllEvents {
 		return pv.causeExists(id)
 	}
-	inRecent := false
-	for _, ev := range pv.Snap.RecentEvents {
-		if ev.ID != id {
-			continue
-		}
-		inRecent = true
-		break
-	}
-	if inRecent {
-		return pv.CanObserveEvent(regionID, id)
-	}
-	// Outside the recent window the snapshot no longer lists the
-	// event: only a report delivered to this region can make it
-	// knowable.
-	if pv.DB == nil {
-		return false
-	}
-	ev, err := pv.DB.GetEvent(context.Background(), id)
-	if err != nil {
-		return false
+	return pv.CanObserveEvent(regionID, id)
+}
+
+// CanObserveEvent reports whether a region could know a committed event
+// at the snapshot boundary: an observation record (its region witnessed
+// it) or a report already delivered to it. The access record is
+// persistent, so an event does not stop being known by aging out of
+// the prompt's recent window. Being affected by an event is not enough:
+// geography is not access.
+func (pv *ProposalValidator) CanObserveEvent(regionID domain.ID, eventID domain.ID) bool {
+	if _, ok := pv.Snap.Observed[regionID][eventID]; ok {
+		return true
 	}
 	for _, rep := range pv.Snap.DeliveredReports[regionID] {
-		if rep.EventID == ev.ID {
+		if rep.EventID == eventID {
 			return true
 		}
 	}
 	return false
 }
 
-// CanObserveEvent reports whether a region could know a committed event
-// at the snapshot boundary: its own region's recent history (authorship
-// or direct involvement) or a report already delivered to it. Reaction
-// questions must rest only on such events, or the reaction round would
-// leak news before its delivery time.
-func (pv *ProposalValidator) CanObserveEvent(regionID domain.ID, eventID domain.ID) bool {
-	for _, ev := range pv.Snap.RecentEvents {
-		if ev.ID != eventID {
-			continue
+// maxAccountBytes bounds one limited account.
+const maxAccountBytes = 600
+
+// checkAccess validates an event's observers and limited accounts. The
+// origin always witnesses its own event in full, so it is neither an
+// observer entry nor an account key.
+func (pv *ProposalValidator) checkAccess(origin domain.ID, ev *domain.PropEvent) error {
+	obs := map[string]bool{}
+	for _, r := range ev.Observers {
+		if pv.Snap.Regions[r] == nil {
+			return fmt.Errorf("observer %q is not a region", r)
 		}
-		for _, rid := range ev.RegionIDs {
-			if rid == regionID {
-				return true
-			}
+		if r == origin {
+			return fmt.Errorf("observer %q is the origin, which always witnesses its own event; list only other regions", r)
 		}
-		for _, rep := range pv.Snap.DeliveredReports[regionID] {
-			if rep.EventID == eventID {
-				return true
-			}
-		}
-		return false
+		obs[r] = true
 	}
-	if pv.DB != nil {
-		// Older events leave the recent window but stay knowable
-		// through delivered reports.
-		for _, rep := range pv.Snap.DeliveredReports[regionID] {
-			if rep.EventID == eventID {
-				return true
+	for r, text := range ev.Accounts {
+		if !obs[r] {
+			if _, ok := ev.Delivery[r]; !ok {
+				return fmt.Errorf("account for %q: that region is neither an observer nor a delivery target of the event", r)
 			}
+		}
+		if strings.TrimSpace(text) == "" || len(text) > maxAccountBytes {
+			return fmt.Errorf("account for %q must be present and at most %d bytes", r, maxAccountBytes)
 		}
 	}
-	return false
+	return nil
 }
 
 // ValidateReaction checks one reaction request: the region must exist
@@ -964,11 +987,11 @@ func (pv *ProposalValidator) ValidateReaction(regionID domain.ID, rx ReactionReq
 		return fmt.Errorf("reaction target %q is not a region", regionID)
 	}
 	if len(rx.Premise) == 0 {
-		return fmt.Errorf("reaction for %q needs a premise: name at least one canonical event from that region's own history or delivered reports", regionID)
+		return fmt.Errorf("reaction for %q needs a premise: name at least one canonical event that region witnessed or received by report", regionID)
 	}
 	for _, id := range rx.Premise {
 		if !pv.CanObserveEvent(regionID, id) {
-			return fmt.Errorf("reaction for %q: premise event %q is not knowable by that region yet (recent own history or delivered reports only)", regionID, id)
+			return fmt.Errorf("reaction for %q: premise event %q is not knowable by that region yet (events it witnessed or reports delivered to it only)", regionID, id)
 		}
 	}
 	return nil

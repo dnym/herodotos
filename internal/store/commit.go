@@ -20,6 +20,17 @@ type CommittedEvent struct {
 	EntityIDs []domain.ID
 	CauseIDs  []domain.ID
 	Changes   []domain.Change
+	// Observers are the regions whose agents witness the event, each
+	// with an optional limited account ("" = full prose). RegionIDs
+	// says where an event is relevant; only Observers and delivered
+	// reports make it known.
+	Observers []Observation
+}
+
+// Observation grants one region direct knowledge of an event.
+type Observation struct {
+	Region  domain.ID
+	Account string // empty: the full canonical prose
 }
 
 // ReportPlan schedules knowledge of a committed event (by index in
@@ -28,6 +39,7 @@ type ReportPlan struct {
 	EventIndex   int
 	TargetRegion domain.ID
 	EarliestStep int
+	Account      string // empty: the report carries the full prose
 }
 
 // CommitPlan is one candidate step. Everything in it commits atomically
@@ -85,6 +97,13 @@ func (d *DB) CommitStep(ctx context.Context, plan CommitPlan) ([]string, error) 
 			return nil, fmt.Errorf("event %d: %w", i, err)
 		}
 		ids = append(ids, eid)
+		for _, ob := range ev.Observers {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO observations(event_id, region_id, account) VALUES (?, ?, ?)`,
+				eid, ob.Region, nullable(ob.Account)); err != nil {
+				return nil, fmt.Errorf("event %s observer %s: %w", eid, ob.Region, err)
+			}
+		}
 		for _, ch := range ev.Changes {
 			if err := applyChangeTx(ctx, tx, eid, ch); err != nil {
 				return nil, fmt.Errorf("event %s %q: %w", eid, ev.Title, err)
@@ -105,8 +124,8 @@ func (d *DB) CommitStep(ctx context.Context, plan CommitPlan) ([]string, error) 
 			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO reports(id, event_id, target_region_id, earliest_step) VALUES (?, ?, ?, ?)`,
-			rid, ids[rp.EventIndex], rp.TargetRegion, rp.EarliestStep); err != nil {
+			`INSERT INTO reports(id, event_id, target_region_id, earliest_step, account) VALUES (?, ?, ?, ?, ?)`,
+			rid, ids[rp.EventIndex], rp.TargetRegion, rp.EarliestStep, nullable(rp.Account)); err != nil {
 			return nil, fmt.Errorf("report: %w", err)
 		}
 	}

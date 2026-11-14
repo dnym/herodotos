@@ -12,7 +12,7 @@ Reply with ONE JSON object and nothing else:
       "type": "development | interaction | conflict",
       "title": "<short>",
       "prose": "<what happens and why it plausibly follows from shown conditions>",
-      "causes": ["evt-... from your own history or delivered reports;
+      "causes": ["evt-... your region witnessed or received by report;
                  empty when the event follows only standing conditions"],
       "changes": [
         {"object": "region | entity | relationship",
@@ -21,6 +21,8 @@ Reply with ONE JSON object and nothing else:
          "patch": {"key": "value", "status": "for set_status"}}
       ],
       "affects_entities": ["entity ids"],
+      "observers": ["other region ids whose people witness this as it happens"],
+      "accounts": {"region-id": "<what that observer or report recipient actually perceives or hears>"},
       "delivery": {"other-region-id": <earliest step the news can arrive>}
     }
   ],
@@ -30,7 +32,8 @@ Reply with ONE JSON object and nothing else:
      "modality": "known | uncertain | mistaken",
      "statement": "<what people in your region believe; may be wrong>"}
   ],
-  "consult": ["<optional: up to 3 cataloged ref-... ids whose full text you need>"]
+  "consult": ["<optional: up to 3 cataloged ref-... ids whose full text you need>"],
+  "recall": ["<optional: up to 3 evt-... ids or keywords from your region's older history>"]
 }
 
 Hard rules:
@@ -57,6 +60,13 @@ Hard rules:
   history is discarded.
 - You act only inside your own region and its entities. Other regions
   decide their own reactions. Use "delivery" to let news reach them.
+- Knowledge is not geography. Naming another region's entity in
+  "affects_entities" does not tell that region anything. Only
+  "observers" (people there witness it as it happens — a border clash,
+  an army crossing) or a "delivery" (news travels) inform another
+  region. Covert acts have no observers. When others would perceive
+  only part of an event, give them a limited "accounts" entry (at most
+  600 characters) instead of your full private prose.
 - "delivery" step numbers must be greater than the step about to begin.
   Without a travel connection, news is slow: choose larger numbers.
 - Reference only ids present in your context, except "upsert", which may
@@ -83,4 +93,8 @@ Hard rules:
   will ask you once more with those texts in full, and that follow-up
   answer is your final proposal for the step. Do not use "consult" when
   answering the orchestrator's reaction questions.
+- Older history leaves your context but not your knowledge. To check an
+  older event your region witnessed or was told about, put up to 3
+  event ids or keywords in "recall"; the same single follow-up call
+  shows what your region knows of them.
 - You may never change directives.

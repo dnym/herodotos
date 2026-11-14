@@ -111,7 +111,15 @@ type PropEvent struct {
 	Causes          []ID           `json:"causes,omitempty"`
 	Changes         []Change       `json:"changes,omitempty"`
 	AffectsEntities []ID           `json:"affects_entities,omitempty"`
-	Delivery        map[string]int `json:"delivery,omitempty"` // region -> earliest step
+	// Observers are the regions (besides the origin) whose people
+	// witness the event directly as it happens. Being affected is not
+	// observing: the target of a covert act is no observer.
+	Observers []ID `json:"observers,omitempty"`
+	// Accounts gives, per observer or report recipient, the limited
+	// version that region perceives or is told, instead of the full
+	// canonical prose.
+	Accounts map[string]string `json:"accounts,omitempty"`
+	Delivery map[string]int    `json:"delivery,omitempty"` // region -> earliest step
 }
 
 // Proposal is an agent's uncommitted output for one step.
@@ -142,6 +150,9 @@ type Report struct {
 	TargetRegionID ID  `json:"target_region_id"`
 	EarliestStep   int `json:"earliest_step"`
 	DeliveredStep  int `json:"delivered_step"` // 0 when not delivered yet
+	// Account is the limited version the report carries; empty means
+	// the full canonical prose.
+	Account string `json:"account,omitempty"`
 }
 
 // Belief is an in-world belief held by a region's relevant inhabitants or

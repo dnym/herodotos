@@ -19,6 +19,11 @@ type Snapshot struct {
 	Directives       map[domain.ID]*domain.Directive
 	Memories         map[domain.ID]*domain.Memory
 	DeliveredReports map[domain.ID][]domain.Report // by target region
+	// Observed lists, per region, every event its agent witnessed
+	// directly, over the whole history (not just the recent window),
+	// mapped to the account it received ("" = full prose). Together
+	// with DeliveredReports this is the complete access policy.
+	Observed map[domain.ID]map[domain.ID]string
 	Beliefs          map[domain.ID][]domain.Belief
 	WorldRefs        []domain.ReferenceDoc
 	RegionRefs       map[domain.ID][]domain.ReferenceDoc
@@ -91,6 +96,7 @@ func (d *DB) snapshotTx(ctx context.Context, tx *sql.Tx, attemptStep int) (*Snap
 		Directives:       map[domain.ID]*domain.Directive{},
 		Memories:         map[domain.ID]*domain.Memory{},
 		DeliveredReports: map[domain.ID][]domain.Report{},
+		Observed:         map[domain.ID]map[domain.ID]string{},
 		Beliefs:          map[domain.ID][]domain.Belief{},
 		RegionRefs:       map[domain.ID][]domain.ReferenceDoc{},
 	}
@@ -224,7 +230,7 @@ func (d *DB) snapshotTx(ctx context.Context, tx *sql.Tx, attemptStep int) (*Snap
 	}
 	rows, err = tx.QueryContext(ctx,
 		`SELECT id, event_id, target_region_id, earliest_step,
-		        COALESCE(delivered_step, ?)
+		        COALESCE(delivered_step, ?), COALESCE(account, '')
 		 FROM reports
 		 WHERE delivered_step IS NOT NULL OR earliest_step <= ?
 		 ORDER BY COALESCE(delivered_step, ?), id`,
@@ -234,13 +240,35 @@ func (d *DB) snapshotTx(ctx context.Context, tx *sql.Tx, attemptStep int) (*Snap
 	}
 	for rows.Next() {
 		var rep domain.Report
-		if err := rows.Scan(&rep.ID, &rep.EventID, &rep.TargetRegionID, &rep.EarliestStep, &rep.DeliveredStep); err != nil {
+		if err := rows.Scan(&rep.ID, &rep.EventID, &rep.TargetRegionID, &rep.EarliestStep, &rep.DeliveredStep, &rep.Account); err != nil {
 			if err := closeRows(rows); err != nil {
 				return nil, err
 			}
 			return nil, err
 		}
 		s.DeliveredReports[rep.TargetRegionID] = append(s.DeliveredReports[rep.TargetRegionID], rep)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
+
+	rows, err = tx.QueryContext(ctx,
+		`SELECT event_id, region_id, COALESCE(account, '') FROM observations`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var eventID, regionID, account string
+		if err := rows.Scan(&eventID, &regionID, &account); err != nil {
+			if err := closeRows(rows); err != nil {
+				return nil, err
+			}
+			return nil, err
+		}
+		if s.Observed[regionID] == nil {
+			s.Observed[regionID] = map[domain.ID]string{}
+		}
+		s.Observed[regionID][eventID] = account
 	}
 	if err := closeRows(rows); err != nil {
 		return nil, err

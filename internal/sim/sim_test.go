@@ -73,9 +73,9 @@ const orchAccept = `{"notes":"Accepted the regional development.","events":[{"or
 
 const kingTwoProposals = `{"prose":"Unrest spreads; the queen calls a council.","events":[{"type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]},{"type":"development","title":"Emergency council named","prose":"The queen names a regency council.","changes":[{"object":"entity","object_id":"council-regency","op":"upsert","patch":{"kind":"group","name":"Regency Council","region_id":"king-a"}}]}],"memory":{"summary":"Rioting began; a regency council was named."}}`
 
-const orchPartial = `{"notes":"The riots are accepted; the council is premature.","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]},{"origin":"orchestrator","type":"development","title":"Court whispers of regency","prose":"Nameless rumors circulate; no council is named.","changes":[]}]}`
+const orchPartial = `{"notes":"The riots are accepted; the council is premature.","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]},{"origin":"orchestrator","observers":["king-a"],"type":"development","title":"Court whispers of regency","prose":"Nameless rumors circulate; no council is named.","changes":[]}]}`
 
-const orchReplaceAll = `{"notes":"Regional account rejected; a quieter world.","events":[{"origin":"orchestrator","type":"development","title":"A tense silence","prose":"The capital holds its breath; no riots come.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"tense"}}],"affects_entities":["q-elinor"]}]}`
+const orchReplaceAll = `{"notes":"Regional account rejected; a quieter world.","events":[{"origin":"orchestrator","observers":["king-a"],"type":"development","title":"A tense silence","prose":"The capital holds its breath; no riots come.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"tense"}}],"affects_entities":["q-elinor"]}]}`
 
 // A region whose proposals were all rejected must not carry their
 // invented outcomes into persistent memory.
@@ -137,7 +137,7 @@ func TestEntityMoveVisibleToDestinationRegion(t *testing.T) {
 	db, ctx := setup(t)
 	// The queen leaves Aelmark for the principality; the engine, not a
 	// logographer, adjudicates the move.
-	orchMove := `{"notes":"The queen flees north.","events":[{"origin":"orchestrator","type":"movement","title":"The queen crosses the march","prose":"Elinor leaves the capital for Brannholm.","changes":[{"object":"entity","object_id":"q-elinor","op":"upsert","patch":{"region_id":"prin-b"}}]}]}`
+	orchMove := `{"notes":"The queen flees north.","events":[{"origin":"orchestrator","observers":["king-a","prin-b"],"type":"movement","title":"The queen crosses the march","prose":"Elinor leaves the capital for Brannholm.","changes":[{"object":"entity","object_id":"q-elinor","op":"upsert","patch":{"region_id":"prin-b"}}]}]}`
 	fake := &inference.Scripted{Replies: []inference.Reply{
 		{Role: "logographer:king-a", Text: prinQuiet},
 		{Role: "logographer:prin-b", Text: prinQuiet},
@@ -943,5 +943,132 @@ func TestOversizedBindingRuleFailsBeforeInference(t *testing.T) {
 	}
 	if m, _ := db.GetMeta(ctx); m.ClockStep != 0 {
 		t.Fatalf("clock advanced: %d", m.ClockStep)
+	}
+}
+
+// quietSteps commits n empty steps directly, advancing the clock.
+func quietSteps(t *testing.T, db *store.DB, ctx context.Context, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		m, err := db.GetMeta(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		att, err := db.BeginAttempt(ctx, m.ClockStep+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.CommitStep(ctx, store.CommitPlan{AttemptID: att, BaseRevision: m.Revision, Summary: "quiet"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Being targeted by a covert act is not observing it: the target
+// region learns only through delivery, and then only the account the
+// report carries.
+func TestAffectedRegionIsNotInformedRegion(t *testing.T) {
+	db, ctx := setup(t)
+	plot := `{"origin":"prin-b","type":"conflict","title":"Secret plot against the queen","prose":"Brannholm hires a poisoner to kill Queen Elinor.","affects_entities":["q-elinor"],"accounts":{"king-a":"Travellers whisper of strangers asking about the queen."},"delivery":{"king-a":5}}`
+	prinPlot := `{"prose":"A plot.","events":[` + strings.Replace(plot, `"origin":"prin-b",`, "", 1) + `],"memory":{"summary":"We plot."}}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: prinQuiet},
+		{Role: "logographer:prin-b", Text: prinPlot},
+		{Role: "orchestrator", Text: `{"notes":"ok","events":[` + plot + `]}`},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	res, err := e.RunStep(ctx)
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	evID := res.EventIDs[0]
+	ev, _ := db.GetEvent(ctx, evID)
+	if !contains(ev.RegionIDs, "king-a") {
+		t.Fatalf("king-a should still be listed as affected: %v", ev.RegionIDs)
+	}
+	if p := nextStepPrompt(t, db, ctx, "king-a"); strings.Contains(p, "poisoner") || strings.Contains(p, "Secret plot") {
+		t.Fatalf("target region learned of the covert act before delivery:\n%s", p)
+	}
+	if p := nextStepPrompt(t, db, ctx, "prin-b"); !strings.Contains(p, "poisoner") {
+		t.Fatal("authoring region lost its own event")
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	pv := agents.ProposalValidator{Snap: snap, CurrentStep: snap.Meta.ClockStep}
+	if pv.CanObserveEvent("king-a", evID) {
+		t.Fatal("affected region treated as observer")
+	}
+
+	// At delivery the target receives the limited account, never the
+	// private canonical prose.
+	quietSteps(t, db, ctx, 4)
+	snap, _ = db.LoadSnapshotForAttempt(ctx, 5)
+	view, err := knowledge.BuildLogographerView(ctx, snap, "king-a", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := agents.RenderLogographerPrompt(snap.Meta, snap.Meta.ClockStep, view).String()
+	if !strings.Contains(p, "strangers asking about the queen") {
+		t.Fatalf("delivered account missing:\n%s", p)
+	}
+	if strings.Contains(p, "poisoner") || strings.Contains(p, "Secret plot") {
+		t.Fatal("report leaked the private canonical prose")
+	}
+}
+
+// A region's own history stays knowable after it leaves the recent
+// window, and the region can look it up; another region's equally old
+// private event stays inaccessible.
+func TestOldLocalHistoryStaysCitableAndRecallable(t *testing.T) {
+	db, ctx := setup(t)
+	prinSecret := `{"prose":"x","events":[{"type":"development","title":"Hidden treasury","prose":"Brannholm hoards silver in secret."}],"memory":{"summary":"Silver hidden."}}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinSecret},
+		{Role: "orchestrator", Text: `{"notes":"ok","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","affects_entities":["q-elinor"]},{"origin":"prin-b","type":"development","title":"Hidden treasury","prose":"Brannholm hoards silver in secret."}]}`},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	res, err := e.RunStep(ctx)
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	riots, treasury := res.EventIDs[0], res.EventIDs[1]
+	quietSteps(t, db, ctx, 9)
+
+	snap, _ := db.LoadSnapshot(ctx)
+	for _, ev := range snap.RecentEvents {
+		if ev.ID == riots {
+			t.Fatal("fixture: riots still in recent window")
+		}
+	}
+	pv := agents.ProposalValidator{Snap: snap, CurrentStep: snap.Meta.ClockStep, DB: db}
+	cite := func(region string, id domain.ID) error {
+		return pv.ValidateLogographerProposal(domain.ID(region), &domain.PropEvent{Type: "development", Title: "t", Prose: "p", Causes: []domain.ID{id}})
+	}
+	if err := cite("king-a", riots); err != nil {
+		t.Fatalf("aged local event no longer a valid cause: %v", err)
+	}
+	if err := cite("king-a", treasury); err == nil {
+		t.Fatal("another region's private old event accepted as a cause")
+	}
+
+	// Recall: one bounded follow-up answers from the region's own record.
+	recallReply := `{"prose":"Looking back.","events":[],"recall":["riots","silver"]}`
+	final := `{"prose":"Remembering the riots.","events":[{"type":"development","title":"Riot anniversary","prose":"Crowds remember.","causes":["` + riots + `"]}]}`
+	fake2 := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: recallReply},
+		{Role: "logographer:king-a", Text: final},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: `{"notes":"ok","events":[{"origin":"king-a","type":"development","title":"Riot anniversary","prose":"Crowds remember.","causes":["` + riots + `"]}]}`},
+	}}
+	e2 := &Engine{DB: db, Client: fake2, ModelName: "fake"}
+	if _, err := e2.RunStep(ctx); err != nil {
+		t.Fatalf("recall step: %v", err)
+	}
+	follow := fake2.Calls()[1].Prompt
+	if !strings.Contains(follow, riots) || !strings.Contains(follow, "Crowds demand grain") {
+		t.Fatalf("recall did not surface the region's own history:\n%s", follow)
+	}
+	if strings.Contains(follow, "hoards silver") {
+		t.Fatal("recall leaked another region's private event")
 	}
 }

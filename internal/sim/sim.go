@@ -146,14 +146,26 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			return fail(fmt.Sprintf("region %s proposal failed", regionID), err)
 		}
 		// Skill-style progressive disclosure: if the historian asked
-		// for cataloged documents, spend exactly one follow-up call
-		// with their texts in context. A failed consult costs a call
-		// but never the step; the first reply stands and there is no
-		// second consult round.
-		if len(reply.Consult) > 0 && st.used < b.MaxModelCallsPerStep {
-			if docs := agents.ConsultDocs(reply.Consult, knowledge.VisibleReferences(view)); len(docs) > 0 {
-				if consulted, cerr := st.askConsult(ctx, regionID, view, docs); cerr == nil {
-					reply = consulted
+		// for cataloged documents or for its own older history, spend
+		// exactly one follow-up call with those texts in context. A
+		// failed follow-up costs a call but never the step; the first
+		// reply stands and there is no second round.
+		if (len(reply.Consult) > 0 || len(reply.Recall) > 0) && st.used < b.MaxModelCallsPerStep {
+			docs := agents.ConsultDocs(reply.Consult, knowledge.VisibleReferences(view))
+			var add string
+			if len(docs) > 0 {
+				add += agents.RenderConsultSection(docs)
+			}
+			if len(reply.Recall) > 0 {
+				history, herr := e.DB.RegionHistory(ctx, regionID, newStep)
+				if herr != nil {
+					return fail("history lookup", herr)
+				}
+				add += agents.RenderRecallSection(reply.Recall, knowledge.Recall(history, reply.Recall))
+			}
+			if add != "" {
+				if followed, ferr := st.askFollowUp(ctx, regionID, view, add); ferr == nil {
+					reply = followed
 				}
 			}
 		}
@@ -276,13 +288,19 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			CauseIDs:  ev.Causes,
 		}
 		ce.RegionIDs = affectedRegions(snap, &ev)
+		witnesses := observers(&ev)
+		for _, r := range witnesses {
+			ce.Observers = append(ce.Observers, store.Observation{Region: r, Account: ev.Accounts[r]})
+		}
 		idx := len(plan.Events)
 		plan.Events = append(plan.Events, ce)
-		for region, step := range ev.Delivery {
-			if region == ev.Origin {
-				continue
+		for _, region := range sortedKeys(ev.Delivery) {
+			if contains(witnesses, region) {
+				continue // it saw for itself; no news needs to travel
 			}
-			plan.Reports = append(plan.Reports, store.ReportPlan{EventIndex: idx, TargetRegion: region, EarliestStep: step})
+			plan.Reports = append(plan.Reports, store.ReportPlan{
+				EventIndex: idx, TargetRegion: region, EarliestStep: ev.Delivery[region], Account: ev.Accounts[region],
+			})
 		}
 	}
 
@@ -355,8 +373,46 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 	}, nil
 }
 
+// observers lists the regions that witness an event directly: the
+// regional origin, which always sees its own event in full, plus the
+// declared observers. Affected regions are deliberately not included —
+// a target of a covert act learns of it only by observation or report.
+func observers(ev *domain.PropEvent) []domain.ID {
+	var out []domain.ID
+	if ev.Origin != "" && ev.Origin != "orchestrator" {
+		out = append(out, ev.Origin)
+	}
+	for _, r := range ev.Observers {
+		if !contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func contains(ids []domain.ID, id domain.ID) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // affectedRegions derives the regions an event record should list: the
 // origin plus every region whose state or entities the event touches.
+// This is geographical relevance for filtering and inspection, not
+// access: see observers.
 func affectedRegions(snap *store.Snapshot, ev *domain.PropEvent) []domain.ID {
 	seen := map[domain.ID]bool{}
 	var out []domain.ID
@@ -455,10 +511,10 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 	return reply, nil
 }
 
-func (s *stepRun) askConsult(ctx context.Context, regionID string, view *knowledge.LogographerView, docs []domain.ReferenceDoc) (*agents.LogographerReply, error) {
+func (s *stepRun) askFollowUp(ctx context.Context, regionID string, view *knowledge.LogographerView, section string) (*agents.LogographerReply, error) {
 	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view)
-	add := agents.RenderConsultSection(docs) +
-		"\nThese are the reference documents you asked for. Give your final answer now in the same JSON format; no further documents are available this step.\n"
+	add := section +
+		"\nThis is what you asked to consult or recall. Give your final answer now in the same JSON format; no further lookups are available this step.\n"
 	var reply *agents.LogographerReply
 	err := retryParse(s, ctx, "logographer:"+regionID+":consult", agents.SystemLogographer(), prompt, add, 0.8, s.b.MaxOutputTokens,
 		func(text string) error {

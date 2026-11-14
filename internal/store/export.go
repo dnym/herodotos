@@ -24,6 +24,7 @@ type ExportBundle struct {
 	References    []domain.ReferenceDoc `json:"references"`
 	Events        []domain.Event        `json:"events"`
 	Reports       []domain.Report       `json:"reports"`
+	Observations  []ExportObservation   `json:"observations"`
 	Beliefs       []domain.Belief       `json:"beliefs"`
 	Memories      []domain.Memory       `json:"memories"`
 	Meta          domain.Meta           `json:"meta"`
@@ -33,6 +34,14 @@ type ExportBundle struct {
 // ExportPause records a durable world pause, if one is in effect.
 type ExportPause struct {
 	Reason string `json:"reason"`
+}
+
+// ExportObservation records that a region witnessed an event directly,
+// with the limited account it received (empty: the full prose).
+type ExportObservation struct {
+	EventID  domain.ID `json:"event_id"`
+	RegionID domain.ID `json:"region_id"`
+	Account  string    `json:"account,omitempty"`
 }
 
 // ExportBundle reads the entire committed world in chronological order.
@@ -83,7 +92,7 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 	b.Events = events
 
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, event_id, target_region_id, earliest_step, COALESCE(delivered_step, 0)
+		`SELECT id, event_id, target_region_id, earliest_step, COALESCE(delivered_step, 0), COALESCE(account, '')
 		 FROM reports ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -91,12 +100,29 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var rp domain.Report
-		if err := rows.Scan(&rp.ID, &rp.EventID, &rp.TargetRegionID, &rp.EarliestStep, &rp.DeliveredStep); err != nil {
+		if err := rows.Scan(&rp.ID, &rp.EventID, &rp.TargetRegionID, &rp.EarliestStep, &rp.DeliveredStep, &rp.Account); err != nil {
 			return nil, err
 		}
 		b.Reports = append(b.Reports, rp)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	orows, err := tx.QueryContext(ctx,
+		`SELECT event_id, region_id, COALESCE(account, '') FROM observations ORDER BY event_id, region_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer orows.Close()
+	for orows.Next() {
+		var ob ExportObservation
+		if err := orows.Scan(&ob.EventID, &ob.RegionID, &ob.Account); err != nil {
+			return nil, err
+		}
+		b.Observations = append(b.Observations, ob)
+	}
+	if err := orows.Err(); err != nil {
 		return nil, err
 	}
 
