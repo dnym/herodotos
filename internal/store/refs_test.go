@@ -115,3 +115,44 @@ Salt, blood, and distance: a mage binds only what they have touched.
 		t.Error("empty document must fail validation")
 	}
 }
+
+// Explicit ids inside the generated namespace must not wedge automatic
+// allocation: the allocator skips taken ids instead of colliding on
+// every retry.
+func TestAutomaticIDsSkipExplicitOnes(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	for _, id := range []domain.ID{"ref-000001", "ref-000002"} {
+		if _, err := db.CreateReference(ctx, domain.ReferenceDoc{
+			ID: id, Scope: "world", Title: "custom " + id, Body: "x",
+		}); err != nil {
+			t.Fatalf("explicit %s: %v", id, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		id, err := db.CreateReference(ctx, domain.ReferenceDoc{Scope: "world", Title: "auto", Body: "y"})
+		if err != nil {
+			t.Fatalf("automatic allocation %d: %v", i, err)
+		}
+		if id == "ref-000001" || id == "ref-000002" {
+			t.Fatalf("allocator reused an explicit id: %s", id)
+		}
+	}
+	refs, err := db.ListReferences(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 4 {
+		t.Fatalf("want 4 references, got %d", len(refs))
+	}
+
+	// Same for directives created through the editor after an import
+	// claimed generated-looking ids.
+	if _, err := db.sqlDB.ExecContext(ctx,
+		`INSERT INTO directives(id, text, hard, status) VALUES ('dir-000001', 'imported', 0, 'pending')`); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := db.CreateDirective(ctx, "new", false); err != nil || id == "dir-000001" {
+		t.Fatalf("directive allocation: id=%q err=%v", id, err)
+	}
+}

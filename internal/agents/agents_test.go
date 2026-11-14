@@ -200,6 +200,9 @@ func TestMalformedRepliesNeverPanic(t *testing.T) {
 		"{", "{not json}", "[]", "null", "42", `"text reply"`,
 		`{"prose":"ok"}{"prose":"second"}`,
 		`{"prose":"ok"} trailing narration`,
+		`{"events":[]}]`,
+		`{"events":[]}}`,
+		`{"events":[]}]}`,
 		`{"prose":"ok", "deliveries": {}}`,
 		"```json\n{\"prose\":\"fenced\",\"events\":[]}\n```",
 	}

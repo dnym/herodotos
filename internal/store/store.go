@@ -180,8 +180,28 @@ func setMetaTx(ctx context.Context, tx execer, key, value string) error {
 	return err
 }
 
-// nextIDTx allocates the next stable identifier of the given type.
+// idTables maps each generated identifier prefix to the table whose
+// primary key it fills.
+var idTables = map[string]string{
+	"evt": "events",
+	"rep": "reports",
+	"bel": "beliefs",
+	"att": "attempts",
+	"dir": "directives",
+	"ref": "reference_docs",
+}
+
+// nextIDTx allocates the next unused stable identifier of the given
+// type. The sequence is a hint, not the authority: imported worlds and
+// explicit ids may already occupy the generated namespace (a reference
+// created as "ref-000001"), so the candidate is checked against its
+// table and skipped while taken. Without that check one custom id
+// would make every later automatic allocation collide forever.
 func nextIDTx(ctx context.Context, tx execer, prefix string) (string, error) {
+	table, ok := idTables[prefix]
+	if !ok {
+		return "", fmt.Errorf("no table registered for id prefix %q", prefix)
+	}
 	key := "next-" + prefix
 	var cur string
 	err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&cur)
@@ -194,11 +214,21 @@ func nextIDTx(ctx context.Context, tx execer, prefix string) (string, error) {
 	if _, err := fmt.Sscan(cur, &n); err != nil {
 		return "", fmt.Errorf("sequence %s corrupted: %w", key, err)
 	}
-	n++
-	if err := setMetaTx(ctx, tx, key, fmt.Sprint(n)); err != nil {
-		return "", err
+	for {
+		n++
+		id := fmt.Sprintf("%s-%06d", prefix, n)
+		var taken int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM `+table+` WHERE id = ?`, id).Scan(&taken); err != nil {
+			return "", err
+		}
+		if taken == 0 {
+			if err := setMetaTx(ctx, tx, key, fmt.Sprint(n)); err != nil {
+				return "", err
+			}
+			return id, nil
+		}
 	}
-	return fmt.Sprintf("%s-%06d", prefix, n), nil
 }
 
 func utcNow() string {

@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -210,10 +211,14 @@ func decodeStrictJSON(text string, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
-	// Exactly one JSON value: a second object or trailing prose means the
-	// model answered twice or narrated after the JSON.
-	if dec.More() {
-		return fmt.Errorf("reply carries more than one JSON value")
+	// Exactly one JSON value: a second object, trailing prose, or a stray
+	// closing delimiter means the model answered twice, narrated after
+	// the JSON, or lost track of its nesting. Decoder.More() is not an
+	// end-of-input check (it reports false before "]" or "}"), so a
+	// second decode must hit io.EOF.
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("reply carries trailing content after the JSON object")
 	}
 	return nil
 }
