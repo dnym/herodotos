@@ -224,6 +224,7 @@ type Attempt struct {
 	ID          ID     `json:"id"`
 	Step        int    `json:"step"` // the step boundary this attempt advances to
 	Status      string `json:"status"`
-	Error       string `json:"error"`
+	Error       string `json:"error"`        // the failing stage
+	Detail      string `json:"detail"`       // the underlying cause, when recorded
 	PauseReason string `json:"pause_reason"` // set when this attempt halted the world
 }

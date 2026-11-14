@@ -246,7 +246,7 @@ func TestInvalidChangeRollsBackEverything(t *testing.T) {
 	if len(snap.RecentEvents) != 0 {
 		t.Fatal("partial events applied")
 	}
-	if err := d.MarkAttemptFailed(ctx, att, err.Error()); err != nil {
+	if err := d.MarkAttemptFailed(ctx, att, "commit", err.Error()); err != nil {
 		t.Fatal(err)
 	}
 	attempts, _ := d.ListAttempts(ctx, 5)

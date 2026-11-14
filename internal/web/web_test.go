@@ -810,3 +810,27 @@ const kingBusy = `{"prose":"Unrest spreads.","events":[{"type":"development","ti
 const prinOpinion = `{"prose":"We watch.","events":[],"beliefs":[{"modality":"mistaken","statement":"Kingdom A starves."}],"memory":{"summary":"Watching."}}`
 
 const orchAcceptWeb = `{"notes":"accepted","events":[{"origin":"king-a","type":"development","title":"Rioting in the capital","prose":"Crowds demand grain.","changes":[{"object":"region","object_id":"king-a","op":"set_attrs","patch":{"unrest":"high"}}],"affects_entities":["q-elinor"]}]}`
+
+// A failed attempt explains itself after the fact: stage, underlying
+// cause, and the effective settings of each model call.
+func TestFailedAttemptIsSelfContained(t *testing.T) {
+	s := newTestServer(t, true)
+	s.Engine.Client = &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: quietKing},
+		{Role: "logographer:prin-b", Text: quietPrin},
+		{Role: "orchestrator", Text: `{"notes":"n","events":[{"origin":"orchestrator","type":"x","title":"Nobody sees","prose":"p"}]}`},
+		{Role: "orchestrator", Text: `{"notes":"n","events":[{"origin":"orchestrator","type":"x","title":"Nobody sees","prose":"p"}]}`},
+		{Role: "orchestrator", Text: `{"notes":"n","events":[{"origin":"orchestrator","type":"x","title":"Nobody sees","prose":"p"}]}`},
+	}}
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+	if _, err := s.Engine.RunStep(context.Background()); err == nil {
+		t.Fatal("step should fail")
+	}
+	body := get(t, ts, "/attempt?id=att-000001", http.StatusOK)
+	for _, want := range []string{"orchestrator failed", "needs &#34;observers&#34;", "max_out=", "t=0.3"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("attempt page lacks %q", want)
+		}
+	}
+}

@@ -12,6 +12,29 @@
   {{else if eq $d.Attempt.Status "committed"}}committed
   {{else}}failed: {{$d.Attempt.Error}}{{if $d.Attempt.PauseReason}} &mdash; halted the world: {{$d.Attempt.PauseReason}}{{end}}{{end}}
 </p>
+{{if $d.Attempt.Detail}}<pre class="faildetail">{{$d.Attempt.Detail}}</pre>{{end}}
+
+{{if $d.Outcomes}}
+<section>
+  <h2>What adjudication did with each proposal</h2>
+  <p class="hint">"accepted" means a committed event carries the proposal unchanged; only then
+  does the region's draft memory stand without reconciliation. Reasons are the orchestrator's
+  and are never shown to regional historians.</p>
+  <table>
+    <tr><th>ref</th><th>author</th><th>proposal</th><th>outcome</th><th>orchestrator said</th><th>reason</th></tr>
+    {{range $o := $d.Outcomes}}
+    <tr>
+      <td><code>{{$o.Ref}}</code></td>
+      <td>{{$o.Author}}</td>
+      <td>{{$o.Title}}</td>
+      <td class="outcome-{{$o.Outcome}}">{{$o.Outcome}}</td>
+      <td>{{if $o.Declared}}{{$o.Declared}}{{else}}<span class="hint">&mdash;</span>{{end}}</td>
+      <td>{{$o.Reason}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+{{end}}
 
 <section>
   <h2>Proposals (agent output; never canonical on their own)</h2>
@@ -35,12 +58,13 @@ delivery:        {{$p.Delivery}}</pre>
   <h2>Model calls</h2>
   {{if not $d.Calls}}<p class="hint">None recorded{{if $live}} yet{{end}}.</p>{{end}}
   <table>
-    <tr><th>#</th><th>role</th><th>model</th><th>in</th><th>out</th><th>ms</th><th>outcome</th></tr>
+    <tr><th>#</th><th>role</th><th>model</th><th>settings</th><th>in</th><th>out</th><th>ms</th><th>outcome</th></tr>
     {{range $c := $d.Calls}}
     <tr>
       <td>{{$c.Seq}}</td>
       <td><code>{{$c.Role}}</code></td>
       <td>{{$c.Model}}</td>
+      <td class="settings">{{if $c.MaxTokens}}t={{$c.Temperature}} max_out={{$c.MaxTokens}}<br>prompt {{$c.PromptBytes}}{{if $c.PromptBudget}}/{{$c.PromptBudget}}{{end}} B{{else}}<span class="hint">&mdash;</span>{{end}}</td>
       <td>{{$c.InTokens}}</td>
       <td>{{$c.OutTokens}}</td>
       <td>{{$c.DurationMS}}</td>

@@ -272,3 +272,11 @@ dl.facts-inline dd { margin: 0; }
   .clock { text-align: left; }
   table { font-size: .82rem; }
 }
+
+/* attempt diagnostics: underlying cause, proposal outcomes, call settings */
+pre.faildetail { white-space: pre-wrap; border-left: 3px solid var(--bad); background: var(--bad-wash); }
+.outcome-accepted { color: var(--accent); }
+.outcome-revised { color: var(--bronze); }
+.outcome-rejected, .outcome-unaccounted { color: var(--bad); }
+td.settings { font-family: var(--mono); font-size: .75rem; white-space: nowrap; }
+.status-withdrawn { color: var(--muted); text-decoration: line-through; }

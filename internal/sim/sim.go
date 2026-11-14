@@ -96,13 +96,17 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 
 	snap, err := e.DB.LoadSnapshotForAttempt(ctx, newStep)
 	if err != nil {
-		e.DB.MarkAttemptFailed(context.WithoutCancel(ctx), attemptID, "snapshot failed")
+		e.DB.MarkAttemptFailed(context.WithoutCancel(ctx), attemptID, "snapshot failed", err.Error())
 		return nil, fmt.Errorf("snapshot: %w", err)
 	}
 	currentStep := snap.Meta.ClockStep
 
 	fail := func(reason string, err error) (*Result, error) {
-		e.DB.MarkAttemptFailed(context.WithoutCancel(ctx), attemptID, reason)
+		detail := ""
+		if err != nil {
+			detail = err.Error()
+		}
+		e.DB.MarkAttemptFailed(context.WithoutCancel(ctx), attemptID, reason, detail)
 		return nil, &Failure{AttemptID: attemptID, Reason: reason, Err: err}
 	}
 
@@ -744,7 +748,8 @@ func (s *stepRun) call(ctx context.Context, role, system, prompt string, temp fl
 	// replacing the real error with a storage failure.
 	recCtx, recCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	recErr := s.e.DB.RecordModelCall(recCtx, s.attempt, role, s.e.ModelName, hex.EncodeToString(sum[:]),
-		reqJSON, respJSON, resp.InputTokens, resp.OutputTokens, dur, errStr)
+		reqJSON, respJSON, resp.InputTokens, resp.OutputTokens, dur, errStr,
+		store.CallSettings{Temperature: temp, MaxTokens: maxTokens, PromptBytes: len(system) + len(prompt), PromptBudget: s.b.MaxPromptBytes})
 	recCancel()
 	if recErr != nil {
 		if callErr != nil {

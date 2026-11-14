@@ -990,7 +990,12 @@ func (s *Server) pageAttempt(w http.ResponseWriter, r *http.Request) {
 			calls[i].Response = calls[i].Response[:6000] + "\n…[truncated for display]"
 		}
 	}
-	detail := attemptDetail{Attempt: attempt, Proposals: proposals, Calls: calls}
+	outcomes, err := s.DB.ListProposalOutcomes(ctx, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	detail := attemptDetail{Attempt: attempt, Proposals: proposals, Calls: calls, Outcomes: outcomes}
 	// The live view polls this page with htmx. Polls must receive only the
 	// refreshable fragment: swapping a full page (with the main menu) into
 	// the polling div duplicates the chrome inside the page.
@@ -1010,6 +1015,7 @@ type attemptDetail struct {
 	Attempt   domain.Attempt
 	Proposals []store.ProposalRow
 	Calls     []store.ModelCallRow
+	Outcomes  []store.ProposalOutcome
 }
 
 // --- helpers ---

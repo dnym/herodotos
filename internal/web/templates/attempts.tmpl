@@ -13,7 +13,7 @@ diagnostics but produced no canonical change.</p>
     <td><a href="/attempt?id={{$a.ID}}"><code>{{$a.ID}}</code></a></td>
     <td>{{$a.Step}}</td>
     <td class="status-{{$a.Status}}">{{$a.Status}}</td>
-    <td>{{if $a.PauseReason}}halted the world: {{$a.PauseReason}}{{else}}{{$a.Error}}{{end}}</td>
+    <td>{{if $a.PauseReason}}halted the world: {{$a.PauseReason}}{{else}}{{$a.Error}}{{if $a.Detail}}<br><span class="hint">{{$a.Detail}}</span>{{end}}{{end}}</td>
   </tr>
   {{end}}
 </table>

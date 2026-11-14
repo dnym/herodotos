@@ -373,11 +373,12 @@ func (d *DB) BeginAttempt(ctx context.Context, step int) (string, error) {
 	return id, nil
 }
 
-// MarkAttemptFailed records a non-committed attempt's outcome.
-func (d *DB) MarkAttemptFailed(ctx context.Context, attemptID, reason string) error {
+// MarkAttemptFailed records a non-committed attempt's outcome: the
+// failing stage, and the underlying cause when there is one.
+func (d *DB) MarkAttemptFailed(ctx context.Context, attemptID, stage, detail string) error {
 	_, err := d.sqlDB.ExecContext(ctx,
-		`UPDATE attempts SET status='failed', ended_utc=?, error=? WHERE id=? AND status='running'`,
-		utcNow(), reason, attemptID)
+		`UPDATE attempts SET status='failed', ended_utc=?, error=?, detail=? WHERE id=? AND status='running'`,
+		utcNow(), stage, nullable(detail), attemptID)
 	return err
 }
 
@@ -397,16 +398,27 @@ func (d *DB) RecordProposal(ctx context.Context, attemptID string, p domain.Prop
 	return err
 }
 
+// CallSettings are the effective request settings of one model call.
+type CallSettings struct {
+	Temperature  float64
+	MaxTokens    int
+	PromptBytes  int // bytes of system plus prompt actually sent
+	PromptBudget int // the configured prompt ceiling (0 = none)
+}
+
 // RecordModelCall stores one inference interaction for auditability.
-func (d *DB) RecordModelCall(ctx context.Context, attemptID, role, model, promptSHA string, reqJSON, respJSON string, inTok, outTok, durMS int, callErr string) error {
+// Authorization headers never reach this layer.
+func (d *DB) RecordModelCall(ctx context.Context, attemptID, role, model, promptSHA string, reqJSON, respJSON string, inTok, outTok, durMS int, callErr string, cs CallSettings) error {
 	var errArg any
 	if callErr != "" {
 		errArg = callErr
 	}
 	_, err := d.sqlDB.ExecContext(ctx,
-		`INSERT INTO model_calls(attempt_id, role, model, prompt_sha256, request_json, response_json, input_tokens, output_tokens, duration_ms, error)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		attemptID, role, model, promptSHA, reqJSON, respJSON, inTok, outTok, durMS, errArg)
+		`INSERT INTO model_calls(attempt_id, role, model, prompt_sha256, request_json, response_json, input_tokens, output_tokens, duration_ms, error,
+		                         temperature, max_tokens, prompt_bytes, prompt_budget)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		attemptID, role, model, promptSHA, reqJSON, respJSON, inTok, outTok, durMS, errArg,
+		cs.Temperature, cs.MaxTokens, cs.PromptBytes, cs.PromptBudget)
 	return err
 }
 
