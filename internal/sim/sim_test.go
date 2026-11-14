@@ -1072,3 +1072,23 @@ func TestOldLocalHistoryStaysCitableAndRecallable(t *testing.T) {
 		t.Fatal("recall leaked another region's private event")
 	}
 }
+
+func TestNewEntityParticipatesInItsCreation(t *testing.T) {
+	db, ctx := setup(t)
+	birth := `{"type":"development","title":"An heir is born","prose":"The queen bears a son.","changes":[{"object":"entity","object_id":"prince-a","op":"upsert","patch":{"kind":"person","name":"Prince Aldo","region_id":"king-a"}}],"affects_entities":["q-elinor","prince-a"]}`
+	later := `{"type":"development","title":"The heir is named","prose":"Aldo is proclaimed heir.","changes":[{"object":"entity","object_id":"prince-a","op":"set_attrs","patch":{"title":"heir"}}]}`
+	withOrigin := func(ev string) string { return strings.Replace(ev, `{"type"`, `{"origin":"king-a","type"`, 1) }
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: `{"prose":"x","events":[` + birth + `,` + later + `]}`},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: `{"notes":"ok","events":[` + withOrigin(birth) + `,` + withOrigin(later) + `]}`},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if p := snap.Entities["prince-a"]; p == nil || p.Attrs["title"] != "heir" {
+		t.Fatalf("created entity missing or not updated: %+v", p)
+	}
+}

@@ -271,10 +271,10 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 	}
 	// Which regions survive as authors in the adjudicated outcome.
 	represented := map[domain.ID]bool{}
+	if err := st.pv.ValidateFinalEvents(final.Events); err != nil {
+		return fail("final event rejected", err)
+	}
 	for _, ev := range final.Events {
-		if err := st.pv.ValidateFinalEvent(&ev); err != nil {
-			return fail("final event rejected", err)
-		}
 		if ev.Origin == "" {
 			ev.Origin = "orchestrator"
 		}
@@ -492,13 +492,12 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 			if err != nil {
 				return err
 			}
-			for i := range r.Events {
-				if err := s.viewPV.ValidateLogographerProposal(regionID, &r.Events[i]); err != nil {
-					return err
-				}
+			if err := s.viewPV.ValidateLogographerProposals(regionID, r.Events); err != nil {
+				return err
 			}
+			created := agents.CreatedEntities(s.snap, r.Events)
 			for _, bl := range r.Beliefs {
-				if bl.SubjectID != "" && s.snap.Entities[bl.SubjectID] == nil {
+				if bl.SubjectID != "" && s.snap.Entities[bl.SubjectID] == nil && !created[bl.SubjectID] {
 					return fmt.Errorf("belief subject %q is not a known entity", bl.SubjectID)
 				}
 			}
@@ -522,13 +521,12 @@ func (s *stepRun) askFollowUp(ctx context.Context, regionID string, view *knowle
 			if err != nil {
 				return err
 			}
-			for i := range r.Events {
-				if err := s.viewPV.ValidateLogographerProposal(regionID, &r.Events[i]); err != nil {
-					return err
-				}
+			if err := s.viewPV.ValidateLogographerProposals(regionID, r.Events); err != nil {
+				return err
 			}
+			created := agents.CreatedEntities(s.snap, r.Events)
 			for _, bl := range r.Beliefs {
-				if bl.SubjectID != "" && s.snap.Entities[bl.SubjectID] == nil {
+				if bl.SubjectID != "" && s.snap.Entities[bl.SubjectID] == nil && !created[bl.SubjectID] {
 					return fmt.Errorf("belief subject %q is not a known entity", bl.SubjectID)
 				}
 			}
@@ -555,10 +553,8 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt agents.Prompt, rea
 			}
 			// Validate the merged event set here so id mistakes go back
 			// to the orchestrator as corrections, not as a dead attempt.
-			for i := range r.Events {
-				if err := s.pv.ValidateFinalEvent(&r.Events[i]); err != nil {
-					return err
-				}
+			if err := s.pv.ValidateFinalEvents(r.Events); err != nil {
+				return err
 			}
 			for _, ds := range r.DirectiveStatus {
 				if s.snap.Directives[ds.ID] == nil {

@@ -725,10 +725,137 @@ func checkStatusValue(ch domain.Change) error {
 		ch.Object, ch.ObjectID, strings.Join(domain.StatusVocabulary[ch.Object], " or "))
 }
 
-// ValidateLogographerProposal enforces regional authority (FR-021): an
-// agent may change only its own region and entities, and may not touch
-// directives.
+// candidate is the temporary state an event set builds up while it is
+// validated in order: objects created (or moved) by earlier changes are
+// visible to later ones, exactly as they will be inside the commit
+// transaction. The snapshot itself is never mutated.
+type candidate struct {
+	snap     *store.Snapshot
+	entities map[domain.ID]*domain.Entity // created or moved this step
+	rels     map[domain.ID]bool
+	regions  map[domain.ID]bool
+}
+
+func newCandidate(s *store.Snapshot) *candidate {
+	return &candidate{snap: s, entities: map[domain.ID]*domain.Entity{},
+		rels: map[domain.ID]bool{}, regions: map[domain.ID]bool{}}
+}
+
+func (c *candidate) entity(id domain.ID) *domain.Entity {
+	if e := c.entities[id]; e != nil {
+		return e
+	}
+	return c.snap.Entities[id]
+}
+
+func (c *candidate) region(id domain.ID) bool { return c.regions[id] || c.snap.Regions[id] != nil }
+
+func (c *candidate) rel(id domain.ID) bool { return c.rels[id] || c.snap.Relationships[id] != nil }
+
+var entityKinds = map[string]bool{"person": true, "group": true, "org": true, "settlement": true, "polity": true}
+
+// applyCreation records an upsert in the candidate state, enforcing the
+// rules the commit would otherwise only discover inside its
+// transaction: complete creations, compatible duplicates, and existing
+// endpoints and destinations.
+func (c *candidate) applyCreation(ch domain.Change) error {
+	if ch.Op != "upsert" {
+		return nil
+	}
+	switch ch.Object {
+	case "entity":
+		rid := stringPatchValue(ch.Patch, "region_id")
+		if rid != "" && !c.region(rid) {
+			return fmt.Errorf("entity %q: destination region %q does not exist", ch.ObjectID, rid)
+		}
+		if e := c.entity(ch.ObjectID); e != nil {
+			if k := stringPatchValue(ch.Patch, "kind"); k != "" && k != e.Kind {
+				return fmt.Errorf("entity %q already exists as kind %q; an upsert may not change it to %q (choose a new id for a different entity)", ch.ObjectID, e.Kind, k)
+			}
+			if rid != "" && rid != e.RegionID {
+				moved := *e
+				moved.RegionID = rid
+				c.entities[ch.ObjectID] = &moved
+			}
+			return nil
+		}
+		kind, name := stringPatchValue(ch.Patch, "kind"), stringPatchValue(ch.Patch, "name")
+		if kind == "" || name == "" {
+			return fmt.Errorf("new entity %q needs \"kind\" and \"name\" in its upsert patch", ch.ObjectID)
+		}
+		if !entityKinds[kind] {
+			return fmt.Errorf("new entity %q: kind must be person, group, org, settlement, or polity, got %q", ch.ObjectID, kind)
+		}
+		c.entities[ch.ObjectID] = &domain.Entity{ID: ch.ObjectID, Kind: kind, Name: name, RegionID: rid, Status: "active"}
+	case "relationship":
+		if c.rel(ch.ObjectID) {
+			return nil
+		}
+		src, dst := stringPatchValue(ch.Patch, "source"), stringPatchValue(ch.Patch, "target")
+		if src == "" || dst == "" || stringPatchValue(ch.Patch, "kind") == "" || src == dst {
+			return fmt.Errorf("new relationship %q needs distinct \"source\" and \"target\" entity ids and a \"kind\"", ch.ObjectID)
+		}
+		for _, id := range []string{src, dst} {
+			if c.entity(id) == nil {
+				return fmt.Errorf("new relationship %q: entity %q does not exist (create it first, in this or an earlier event)", ch.ObjectID, id)
+			}
+		}
+		c.rels[ch.ObjectID] = true
+	case "region":
+		if c.region(ch.ObjectID) {
+			return nil
+		}
+		if stringPatchValue(ch.Patch, "name") == "" {
+			return fmt.Errorf("new region %q needs a \"name\"", ch.ObjectID)
+		}
+		c.regions[ch.ObjectID] = true
+	}
+	return nil
+}
+
+func stringPatchValue(patch map[string]any, key string) string {
+	v, _ := patch[key].(string)
+	return v
+}
+
+// CreatedEntities lists entity ids an event set creates, so later
+// references in the same reply (belief subjects) can resolve.
+func CreatedEntities(s *store.Snapshot, evs []domain.PropEvent) map[domain.ID]bool {
+	out := map[domain.ID]bool{}
+	for _, ev := range evs {
+		for _, ch := range ev.Changes {
+			if ch.Object == "entity" && ch.Op == "upsert" && s.Entities[ch.ObjectID] == nil {
+				out[ch.ObjectID] = true
+			}
+		}
+	}
+	return out
+}
+
+// ValidateLogographerProposal checks one event on its own (against the
+// snapshot only). Replies are validated as a set with
+// ValidateLogographerProposals.
 func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID, ev *domain.PropEvent) error {
+	return pv.validateLogographer(authorRegion, ev, newCandidate(pv.Snap))
+}
+
+// ValidateLogographerProposals validates one reply's events in order
+// against a temporary state: an entity created by an upsert may be named
+// in the same event's affects_entities and changed by later events.
+func (pv *ProposalValidator) ValidateLogographerProposals(authorRegion domain.ID, evs []domain.PropEvent) error {
+	c := newCandidate(pv.Snap)
+	for i := range evs {
+		if err := pv.validateLogographer(authorRegion, &evs[i], c); err != nil {
+			return fmt.Errorf("event %d (%q): %w", i, evs[i].Title, err)
+		}
+	}
+	return nil
+}
+
+// validateLogographer enforces regional authority (FR-021): an agent
+// may change only its own region and entities, and may not touch
+// directives.
+func (pv *ProposalValidator) validateLogographer(authorRegion domain.ID, ev *domain.PropEvent, c *candidate) error {
 	newStep := pv.CurrentStep + 1
 	if len(ev.Title) > 200 || len(ev.Prose) > 4000 {
 		return fmt.Errorf("event text too long")
@@ -743,18 +870,23 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 		if !domain.ValidID(ch.ObjectID) {
 			return fmt.Errorf("invalid object id %q", ch.ObjectID)
 		}
+		switch ch.Op {
+		case "set_attrs", "upsert", "set_status":
+		default:
+			return fmt.Errorf("invalid op %q", ch.Op)
+		}
 		switch ch.Object {
 		case "region":
 			if ch.ObjectID != authorRegion {
 				return fmt.Errorf("region authority: you may not change %q (FR-021)", ch.ObjectID)
 			}
 		case "entity":
-			e := pv.Snap.Entities[ch.ObjectID]
+			e := c.entity(ch.ObjectID)
 			if e == nil {
 				if ch.Op != "upsert" {
-					return fmt.Errorf("entity %q does not exist", ch.ObjectID)
+					return fmt.Errorf("entity %q does not exist (an upsert creates it; later events may then change it)", ch.ObjectID)
 				}
-				if rid, _ := ch.Patch["region_id"].(string); rid != "" && rid != authorRegion {
+				if rid := stringPatchValue(ch.Patch, "region_id"); rid != "" && rid != authorRegion {
 					return fmt.Errorf("entity upsert %q must be located in your region", ch.ObjectID)
 				}
 			} else if e.RegionID != authorRegion {
@@ -764,13 +896,9 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 				if ch.Op == "set_attrs" {
 					return fmt.Errorf("entity %q: set_attrs may not set region_id; use upsert to move", ch.ObjectID)
 				}
-				if pv.Snap.Regions[rid] == nil {
-					return fmt.Errorf("entity %q: destination region %q does not exist", ch.ObjectID, rid)
-				}
 			}
 		case "relationship":
-			r := pv.Snap.Relationships[ch.ObjectID]
-			if r == nil && ch.Op != "upsert" {
+			if !c.rel(ch.ObjectID) && ch.Op != "upsert" {
 				return fmt.Errorf("relationship %q does not exist", ch.ObjectID)
 			}
 		case "directive":
@@ -778,17 +906,15 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 		default:
 			return fmt.Errorf("unknown object kind %q", ch.Object)
 		}
-		switch ch.Op {
-		case "set_attrs", "upsert", "set_status":
-		default:
-			return fmt.Errorf("invalid op %q", ch.Op)
-		}
 		if err := checkStatusValue(ch); err != nil {
+			return err
+		}
+		if err := c.applyCreation(ch); err != nil {
 			return err
 		}
 	}
 	for _, id := range ev.AffectsEntities {
-		if _, ok := pv.Snap.Entities[id]; !ok {
+		if c.entity(id) == nil {
 			return fmt.Errorf("unknown entity %q", id)
 		}
 	}
@@ -811,10 +937,31 @@ func (pv *ProposalValidator) ValidateLogographerProposal(authorRegion domain.ID,
 	return pv.checkAccess(authorRegion, ev)
 }
 
-// ValidateFinalEvent checks orchestrator output structurally. Cross-region
-// changes are allowed for the orchestrator, but every id must resolve and
-// deliveries must respect the clock.
+// ValidateFinalEvent checks one orchestrator event on its own (against
+// the snapshot only). The merged history is validated as a set with
+// ValidateFinalEvents.
 func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
+	return pv.validateFinal(ev, newCandidate(pv.Snap))
+}
+
+// ValidateFinalEvents validates the merged event set in commit order
+// against a temporary state, so creations, later references, moves, and
+// duplicate creations are checked before the transaction — where a
+// mistake would kill the attempt instead of feeding a correction.
+func (pv *ProposalValidator) ValidateFinalEvents(evs []domain.PropEvent) error {
+	c := newCandidate(pv.Snap)
+	for i := range evs {
+		if err := pv.validateFinal(&evs[i], c); err != nil {
+			return fmt.Errorf("event %d (%q): %w", i, evs[i].Title, err)
+		}
+	}
+	return nil
+}
+
+// validateFinal checks orchestrator output structurally. Cross-region
+// changes are allowed for the orchestrator, but every id must resolve
+// and deliveries must respect the clock.
+func (pv *ProposalValidator) validateFinal(ev *domain.PropEvent, c *candidate) error {
 	newStep := pv.CurrentStep + 1
 	// Merged outcomes may carry more changes than a single agent's event.
 	if err := checkSize(ev, 2*maxChangesPerEvent, 2*maxPatchKeys); err != nil {
@@ -829,26 +976,26 @@ func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 		if !domain.ValidID(ch.ObjectID) {
 			return fmt.Errorf("invalid object id %q", ch.ObjectID)
 		}
+		switch ch.Op {
+		case "set_attrs", "upsert", "set_status":
+		default:
+			return fmt.Errorf("invalid op %q", ch.Op)
+		}
 		switch ch.Object {
 		case "region":
-			if pv.Snap.Regions[ch.ObjectID] == nil && ch.Op != "upsert" {
+			if !c.region(ch.ObjectID) && ch.Op != "upsert" {
 				return fmt.Errorf("region %q does not exist", ch.ObjectID)
 			}
 		case "entity":
-			e := pv.Snap.Entities[ch.ObjectID]
+			e := c.entity(ch.ObjectID)
 			if e == nil && ch.Op != "upsert" {
-				return fmt.Errorf("entity %q does not exist", ch.ObjectID)
+				return fmt.Errorf("entity %q does not exist (an upsert creates it; later events may then change it)", ch.ObjectID)
 			}
-			if rid, _ := ch.Patch["region_id"].(string); rid != "" {
-				if e != nil && ch.Op == "set_attrs" {
-					return fmt.Errorf("entity %q: set_attrs may not set region_id; use upsert to move", ch.ObjectID)
-				}
-				if pv.Snap.Regions[rid] == nil {
-					return fmt.Errorf("entity %q: destination region %q does not exist", ch.ObjectID, rid)
-				}
+			if _, has := ch.Patch["region_id"]; has && e != nil && ch.Op == "set_attrs" {
+				return fmt.Errorf("entity %q: set_attrs may not set region_id; use upsert to move", ch.ObjectID)
 			}
 		case "relationship":
-			if pv.Snap.Relationships[ch.ObjectID] == nil && ch.Op != "upsert" {
+			if !c.rel(ch.ObjectID) && ch.Op != "upsert" {
 				return fmt.Errorf("relationship %q does not exist", ch.ObjectID)
 			}
 		case "directive":
@@ -858,17 +1005,15 @@ func (pv *ProposalValidator) ValidateFinalEvent(ev *domain.PropEvent) error {
 		default:
 			return fmt.Errorf("unknown object kind %q", ch.Object)
 		}
-		switch ch.Op {
-		case "set_attrs", "upsert", "set_status":
-		default:
-			return fmt.Errorf("invalid op %q", ch.Op)
-		}
 		if err := checkStatusValue(ch); err != nil {
+			return err
+		}
+		if err := c.applyCreation(ch); err != nil {
 			return err
 		}
 	}
 	for _, id := range ev.AffectsEntities {
-		if _, ok := pv.Snap.Entities[id]; !ok {
+		if c.entity(id) == nil {
 			return fmt.Errorf("unknown entity %q", id)
 		}
 	}

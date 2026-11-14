@@ -559,3 +559,49 @@ func TestFitNeverTrimsMandatoryForAdditions(t *testing.T) {
 		t.Fatalf("want BudgetError, got %v", err)
 	}
 }
+
+// An event set is validated against the state it builds up: a birth may
+// name the child it creates, later events may change it, and mistakes
+// that would only surface inside the commit come back as corrections.
+func TestCandidateStateValidation(t *testing.T) {
+	snap := &store.Snapshot{
+		Regions:  map[domain.ID]*domain.Region{"king-a": {ID: "king-a"}, "prin-b": {ID: "prin-b"}},
+		Entities: map[domain.ID]*domain.Entity{"q-elinor": {ID: "q-elinor", Kind: "person", RegionID: "king-a"}},
+	}
+	pv := &ProposalValidator{Snap: snap, CurrentStep: 1}
+	birth := domain.PropEvent{Type: "development", Title: "Birth", Prose: "p", Origin: "king-a",
+		Changes:         []domain.Change{{Object: "entity", ObjectID: "child", Op: "upsert", Patch: map[string]any{"kind": "person", "name": "Child", "region_id": "king-a"}}},
+		AffectsEntities: []domain.ID{"q-elinor", "child"}}
+	naming := domain.PropEvent{Type: "development", Title: "Naming", Prose: "p", Origin: "king-a",
+		Changes: []domain.Change{
+			{Object: "entity", ObjectID: "child", Op: "set_attrs", Patch: map[string]any{"title": "heir"}},
+			{Object: "relationship", ObjectID: "rel-mother", Op: "upsert", Patch: map[string]any{"source": "q-elinor", "target": "child", "kind": "parent"}},
+		}}
+	if err := pv.ValidateFinalEvents([]domain.PropEvent{birth, naming}); err != nil {
+		t.Fatalf("creation with participants and a later reference rejected: %v", err)
+	}
+	if err := pv.ValidateLogographerProposals("king-a", []domain.PropEvent{birth, naming}); err != nil {
+		t.Fatalf("logographer creation set rejected: %v", err)
+	}
+	// Order matters: referencing before creating is still an error.
+	if err := pv.ValidateFinalEvents([]domain.PropEvent{naming, birth}); err == nil {
+		t.Fatal("reference before creation accepted")
+	}
+	// An undeclared id fails with an actionable message.
+	ghost := domain.PropEvent{Type: "development", Title: "Ghost", Prose: "p", Origin: "king-a", AffectsEntities: []domain.ID{"nobody"}}
+	if err := pv.ValidateFinalEvents([]domain.PropEvent{ghost}); err == nil || !strings.Contains(err.Error(), "nobody") {
+		t.Fatalf("undeclared participant: %v", err)
+	}
+	// Incompatible duplicate creation.
+	dup := domain.PropEvent{Type: "development", Title: "Dup", Prose: "p", Origin: "king-a",
+		Changes: []domain.Change{{Object: "entity", ObjectID: "child", Op: "upsert", Patch: map[string]any{"kind": "settlement", "name": "Childton"}}}}
+	if err := pv.ValidateFinalEvents([]domain.PropEvent{birth, dup}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("incompatible duplicate creation: %v", err)
+	}
+	// Incomplete creation is caught before the commit would reject it.
+	bare := domain.PropEvent{Type: "development", Title: "Bare", Prose: "p", Origin: "king-a",
+		Changes: []domain.Change{{Object: "entity", ObjectID: "nameless", Op: "upsert", Patch: map[string]any{"region_id": "king-a"}}}}
+	if err := pv.ValidateFinalEvents([]domain.PropEvent{bare}); err == nil || !strings.Contains(err.Error(), "kind") {
+		t.Fatalf("incomplete creation: %v", err)
+	}
+}
