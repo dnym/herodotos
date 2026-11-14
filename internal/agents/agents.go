@@ -234,107 +234,95 @@ func firstRune(s string) string {
 	return string(r)
 }
 
-// Prompt sections carry an explicit priority. Mandatory sections —
-// directives and binding references: the user's creative direction and
-// the world's rules — are never dropped for space. Optional sections
-// are included in priority order until the budget runs out, oldest
-// priority first out. If even the mandatory material cannot fit, the
-// prompt says so explicitly: a silently amnesiac agent is worse than
-// a loudly broken budget.
+// Prompt sections carry an explicit priority. Mandatory sections — the
+// user's creative direction, the world's binding rules, and the
+// decision material a role cannot act correctly without — are never
+// dropped for space. Optional sections are included in priority order
+// until the budget runs out, lowest priority out first. If the
+// mandatory material plus the immediate task cannot fit, assembly fails
+// with a BudgetError before any inference call: a silently amnesiac
+// agent is worse than a loudly broken budget.
 type promptSection struct {
 	heading   string
 	body      string
 	mandatory bool
 }
 
-const sectionTruncationMarker = "\n...[section cut by byte ceiling]\n"
-
 func (ps promptSection) full() string { return ps.heading + "\n" + ps.body }
 
-func (ps promptSection) size() int { return len(ps.heading) + 1 + len(ps.body) + 1 }
-
-// promptSpec is a rendered prompt under assembly.
-type promptSpec struct {
+// Prompt is a rendered prompt kept structured until the final
+// assembly, so late additions (a reaction request, consulted texts,
+// correction feedback) can be fitted without ever trimming a mandatory
+// section to make room.
+type Prompt struct {
 	head     string
 	footer   string
 	sections []promptSection
 }
 
-func (p promptSpec) assemble(included []promptSection) string {
+// BudgetError reports that a prompt's required material cannot fit the
+// configured byte ceiling. It is an application error: the engine must
+// stop before inference rather than send a prompt missing binding
+// rules or the task itself.
+type BudgetError struct {
+	Required int // bytes of head, mandatory sections, additions, and footer
+	Max      int
+}
+
+func (e *BudgetError) Error() string {
+	return fmt.Sprintf("prompt budget: mandatory material and the immediate task need %d bytes but the ceiling is %d; raise HERODOTOS_BUDGET_MAX_PROMPT_BYTES or shorten directives and binding references", e.Required, e.Max)
+}
+
+func (p Prompt) assemble(include []bool, extra string) string {
 	var b strings.Builder
 	b.WriteString(p.head)
 	b.WriteString("\n")
-	for _, sec := range included {
+	for i, sec := range p.sections {
+		if include != nil && !include[i] {
+			continue
+		}
 		b.WriteString(sec.full())
 		b.WriteString("\n")
 	}
 	b.WriteString(p.footer)
+	b.WriteString(extra)
 	return b.String()
 }
 
-// mandatoryOverflow assembles everything (no section dropped) and
-// appends the diagnostic that the configured ceiling cannot hold the
-// mandatory material.
-func (p promptSpec) mandatoryOverflow() string {
-	out := p.assemble(p.sections)
-	return out + "\n...[ERROR: the configured prompt budget cannot fit the mandatory directives and binding references; raise HERODOTOS_BUDGET_MAX_PROMPT_BYTES]\n" + p.footer
-}
+// String renders the whole prompt with no byte ceiling.
+func (p Prompt) String() string { return p.assemble(nil, "") }
 
-// assembleWithin drops the lowest-priority optional sections (the
-// later ones in the slice) until the prompt fits maxBytes.
-func (p promptSpec) assembleWithin(maxBytes int) string {
+// Fit assembles the prompt with late additions under maxBytes (<= 0
+// means unbounded). Optional sections are dropped lowest priority
+// first; mandatory sections and the additions are never cut. When even
+// those cannot fit, Fit returns a *BudgetError and no prompt.
+func (p Prompt) Fit(extra string, maxBytes int) (string, error) {
 	if maxBytes <= 0 {
-		return p.assemble(p.sections)
+		return p.assemble(nil, extra), nil
 	}
-	mandatory := 0
-	for _, sec := range p.sections {
-		if sec.mandatory {
-			mandatory++
+	include := make([]bool, len(p.sections))
+	for i := range include {
+		include[i] = true
+	}
+	out := p.assemble(include, extra)
+	for i := len(p.sections) - 1; i >= 0 && len(out) > maxBytes; i-- {
+		if p.sections[i].mandatory {
+			continue
 		}
+		include[i] = false
+		out = p.assemble(include, extra)
 	}
-	for drop := 0; drop <= len(p.sections)-mandatory; drop++ {
-		included := p.sections[:len(p.sections)-drop]
-		out := p.assemble(included)
-		if len(out) <= maxBytes {
-			return out
-		}
+	if len(out) > maxBytes {
+		return "", &BudgetError{Required: len(out), Max: maxBytes}
 	}
-	return p.mandatoryOverflow()
-}
-
-// FitPrompt composes a rendered base prompt with late additions such as
-// a reaction question, a consult section, or correction feedback, and
-// applies the byte ceiling after everything is in place. When the
-// combination is too large, the base prompt is trimmed at section
-// boundaries — never the additions, which carry the immediate task.
-func FitPrompt(base, extra string, maxBytes int) string {
-	if maxBytes <= 0 || len(base)+len(extra) <= maxBytes {
-		return base + extra
-	}
-	// content is base with its trailing truncation marker stripped, so
-	// the cut search never lands inside the marker itself.
-	content := base
-	if strings.HasSuffix(content, sectionTruncationMarker) {
-		content = content[:len(content)-len(sectionTruncationMarker)]
-	}
-	for {
-		if cut := strings.LastIndex(content, "\n"); cut > 0 {
-			content = content[:cut]
-		} else {
-			content = ""
-		}
-		candidate := content + sectionTruncationMarker
-		if len(candidate)+len(extra) <= maxBytes || content == "" {
-			return candidate + extra
-		}
-	}
+	return out, nil
 }
 
 // logographerFooter is the instruction closing every regional prompt.
 const logographerFooter = "Advance this world one step as the historian of your region. Reply with the JSON object only."
 
 // RenderLogographerPrompt builds the step context for one regional agent.
-func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.LogographerView, maxBytes int) string {
+func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.LogographerView) Prompt {
 	var hb strings.Builder
 	date := stepDateLabel(meta, currentStep+1)
 	fmt.Fprintf(&hb, "WORLD: %s. Today (start of step %d): %s.\n\n", meta.WorldName, currentStep+1, date)
@@ -399,7 +387,7 @@ func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.Log
 		}
 	}
 
-	p := promptSpec{head: hb.String(), footer: "\n" + logographerFooter, sections: []promptSection{
+	return Prompt{head: hb.String(), footer: "\n" + logographerFooter, sections: []promptSection{
 		// Mandatory: creative direction and world rules survive any
 		// budget pressure.
 		{heading: "DIRECTIVES (creative direction, not fact)", body: directives.String(), mandatory: true},
@@ -414,7 +402,6 @@ func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.Log
 		{heading: "NEIGHBOURING REGIONS (identity only; you do not see their conditions)", body: neighbors.String()},
 		{heading: "REFERENCE DOCUMENTS (advisory, matched to current events)", body: refs.String()},
 	}}
-	return p.assembleWithin(maxBytes)
 }
 
 // refBody renders an advisory reference body with a display cap: a
@@ -482,16 +469,59 @@ func RenderConsultSection(docs []domain.ReferenceDoc) string {
 // orchestratorFooter closes every adjudication prompt.
 const orchestratorFooter = "Produce the single shared history for this step. Reply with the JSON object only."
 
+// ProposalItem is one proposed event with its attempt-stable reference
+// ("p1", "p2", ...). The orchestrator reports a disposition per
+// reference; the engine compares proposals with final outcomes by it.
+type ProposalItem struct {
+	Ref    string
+	Author string // logographer:<region-id>
+	Event  domain.PropEvent
+}
+
+// ProposalMap groups items by author, the shape interaction detection
+// works on.
+func ProposalMap(items []ProposalItem) map[string][]domain.PropEvent {
+	out := map[string][]domain.PropEvent{}
+	for _, it := range items {
+		out[it.Author] = append(out[it.Author], it.Event)
+	}
+	return out
+}
+
 // RenderOrchestratorPrompt builds the adjudication context: everything,
 // clearly separated into proposals, interactions, and canonical state.
-// Directives and binding references are mandatory; the rest is
-// included under the byte ceiling in priority order.
+// Directives, binding references, the proposals themselves, and the
+// canonical records the proposals touch are mandatory — adjudicating an
+// action without the facts needed to validate it is not adjudication.
+// Everything else is included under the byte ceiling in priority order.
 func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Snapshot,
-	proposals map[string][]domain.PropEvent, interactions []Interaction, maxBytes int) string {
+	items []ProposalItem, interactions []Interaction) Prompt {
 	var hb strings.Builder
 	date := stepDateLabel(meta, currentStep+1)
-	fmt.Fprintf(&hb, "WORLD: %s. Step about to begin: %d (%s). Current clock: %d.\n\n",
-		meta.WorldName, currentStep+1, date, currentStep)
+	fmt.Fprintf(&hb, "WORLD: %s. Step about to begin: %d (%s). Current clock: %d. One step lasts %d days.\n\n",
+		meta.WorldName, currentStep+1, date, currentStep, meta.StepDays)
+
+	// The canonical records proposals touch are decision state.
+	touched := map[domain.ID]bool{}
+	touchedRel := map[domain.ID]bool{}
+	for _, it := range items {
+		for _, ch := range it.Event.Changes {
+			switch ch.Object {
+			case "entity":
+				touched[ch.ObjectID] = true
+			case "relationship":
+				touchedRel[ch.ObjectID] = true
+				for _, k := range []string{"source", "target"} {
+					if id, _ := ch.Patch[k].(string); id != "" {
+						touched[id] = true
+					}
+				}
+			}
+		}
+		for _, id := range it.Event.AffectsEntities {
+			touched[id] = true
+		}
+	}
 
 	var regions strings.Builder
 	for _, id := range sortedIDs(mapKeys(snap.Regions)) {
@@ -502,16 +532,24 @@ func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Sna
 	for _, c := range snap.Connections {
 		fmt.Fprintf(&connections, "- %s <-> %s (%d days)\n", c.A, c.B, c.TravelDay)
 	}
-	var entities strings.Builder
+	var touchedEntities, otherEntities strings.Builder
 	for _, id := range sortedIDs(mapKeys(snap.Entities)) {
 		e := snap.Entities[id]
-		fmt.Fprintf(&entities, "- %s %q kind=%s region=%s status=%s %s\n",
+		sb := &otherEntities
+		if touched[id] {
+			sb = &touchedEntities
+		}
+		fmt.Fprintf(sb, "- %s %q kind=%s region=%s status=%s %s\n",
 			id, e.Name, e.Kind, e.RegionID, e.Status, jsonCompact(e.Attrs))
 	}
-	var relationships strings.Builder
+	var touchedRels, otherRels strings.Builder
 	for _, id := range sortedIDs(mapKeys(snap.Relationships)) {
 		r := snap.Relationships[id]
-		fmt.Fprintf(&relationships, "- %s %s -> %s kind=%s status=%s %s\n",
+		sb := &otherRels
+		if touchedRel[id] || touched[r.SourceID] || touched[r.TargetID] {
+			sb = &touchedRels
+		}
+		fmt.Fprintf(sb, "- %s %s -> %s kind=%s status=%s %s\n",
 			r.ID, r.SourceID, r.TargetID, r.Kind, r.Status, jsonCompact(r.Attrs))
 	}
 	var directives strings.Builder
@@ -543,38 +581,34 @@ func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Sna
 		fmt.Fprintf(&recent, "- %s step %d [%s] %s: %s\n", ev.ID, ev.Step, ev.Type, ev.Title, ev.Prose)
 	}
 	var proposalsSb strings.Builder
-	authors := make([]string, 0, len(proposals))
-	for author := range proposals {
-		authors = append(authors, author)
-	}
-	sort.Strings(authors)
-	for _, author := range authors {
-		for i, ev := range proposals[author] {
-			fmt.Fprintf(&proposalsSb, "- [%s #%d] %s: %s | causes=%s changes=%s entities=%s delivery=%s\n",
-				author, i, ev.Title, ev.Prose, jsonCompact(ev.Causes), jsonCompact(ev.Changes),
-				jsonCompact(ev.AffectsEntities), jsonCompact(ev.Delivery))
-		}
+	for _, it := range items {
+		ev := it.Event
+		fmt.Fprintf(&proposalsSb, "- %s [%s] %s: %s | causes=%s changes=%s entities=%s delivery=%s\n",
+			it.Ref, it.Author, ev.Title, ev.Prose, jsonCompact(ev.Causes), jsonCompact(ev.Changes),
+			jsonCompact(ev.AffectsEntities), jsonCompact(ev.Delivery))
 	}
 	var interactionsSb strings.Builder
 	for _, in := range interactions {
 		fmt.Fprintf(&interactionsSb, "- %s: %s among %s\n", in.Kind, strings.Join(in.Objects, ", "), strings.Join(in.Authors, ", "))
 	}
 
-	p := promptSpec{head: hb.String(), footer: "\n" + orchestratorFooter, sections: []promptSection{
-		// Mandatory: the user's direction and the world's rules are
-		// what adjudication is against.
+	return Prompt{head: hb.String(), footer: "\n" + orchestratorFooter, sections: []promptSection{
+		// Mandatory: the user's direction, the world's rules, and the
+		// decision material — proposals plus the canonical records they
+		// touch — are what adjudication is against.
 		{heading: "DIRECTIVES", body: directives.String(), mandatory: true},
 		{heading: "BINDING REFERENCES (world rules: adjudicate against these)", body: bindings.String(), mandatory: true},
-		// The decision material itself outranks reference state.
-		{heading: "PROPOSALS (independent; nothing here is committed)", body: proposalsSb.String()},
-		{heading: "DETECTED INTERACTIONS (structural; semantic conflicts may exist beyond this list)", body: interactionsSb.String()},
+		{heading: "PROPOSALS (independent; nothing here is committed)", body: proposalsSb.String(), mandatory: true},
+		{heading: "DETECTED INTERACTIONS (structural; semantic conflicts may exist beyond this list)", body: interactionsSb.String(), mandatory: true},
+		{heading: "ENTITIES TOUCHED BY PROPOSALS (canonical; proposals may contradict them — you adjudicate)", body: touchedEntities.String(), mandatory: true},
+		{heading: "RELATIONSHIPS TOUCHED BY PROPOSALS (canonical)", body: touchedRels.String(), mandatory: true},
+		{heading: "REGIONS", body: regions.String(), mandatory: true},
+		{heading: "CONNECTIONS", body: connections.String(), mandatory: true},
+		// Optional background, most important first.
 		{heading: "RECENT CANONICAL EVENTS", body: recent.String()},
-		{heading: "REGIONS", body: regions.String()},
-		{heading: "ENTITIES (canonical; proposals may contradict them — you adjudicate)", body: entities.String()},
-		{heading: "RELATIONSHIPS (canonical)", body: relationships.String()},
-		{heading: "CONNECTIONS", body: connections.String()},
+		{heading: "OTHER ENTITIES (canonical)", body: otherEntities.String()},
+		{heading: "OTHER RELATIONSHIPS (canonical)", body: otherRels.String()},
 	}}
-	return p.assembleWithin(maxBytes)
 }
 
 // mapKeys lists map keys for the sorting helpers, which make rendered

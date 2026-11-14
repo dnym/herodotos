@@ -40,6 +40,26 @@ web layer and the CLI are both thin callers of `sim.Engine.RunStep`.
   the clock. Commitment is guarded by a base revision; a stale
   snapshot yields `ErrStaleRevision`, not a partial write.
 
+## Prompt budgets
+
+Prompts stay structured (`agents.Prompt`: a head, prioritized sections,
+a footer) until the final assembly, which happens once per model call
+after every late addition — a reaction request, consulted texts,
+correction feedback — is known. Assembly drops optional sections
+lowest priority first and never touches mandatory ones:
+
+- logographer: the head (region conditions, memory), directives, and
+  binding references;
+- orchestrator: directives, binding references, the proposals, the
+  detected interactions, the canonical entities and relationships the
+  proposals touch, regions, and connections.
+
+If the mandatory material plus the additions cannot fit
+`MaxPromptBytes`, assembly returns `agents.BudgetError` and the attempt
+fails before any inference call, with zero canonical change. Correction
+feedback is capped so a verbose validator message cannot itself break
+the budget.
+
 ## The durable pause
 
 When the orchestrator decides a hard directive cannot be satisfied

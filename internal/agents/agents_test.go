@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"path/filepath"
@@ -153,7 +154,7 @@ func TestRenderPromptsContainOwnConditionsOnly(t *testing.T) {
 		Entities:    []*domain.Entity{{ID: "q-elinor", Kind: "person", Name: "Queen Elinor", RegionID: "king-a", Status: "active"}},
 		AdjacentIDs: []domain.ID{"prin-b"},
 	}
-	p := RenderLogographerPrompt(meta, 0, v, 0)
+	p := RenderLogographerPrompt(meta, 0, v).String()
 	if !strings.Contains(p, `id=king-a`) || !strings.Contains(p, "unrest") {
 		t.Fatal("own conditions missing")
 	}
@@ -266,11 +267,9 @@ func TestOrchestratorPromptCarriesCanonicalEntityState(t *testing.T) {
 				Kind: "alliance", Status: "active"},
 		},
 	}
-	contradicting := map[string][]domain.PropEvent{
-		"logographer:king-a": {{Title: "The healthy queen rides", Prose: "p",
-			Changes: []domain.Change{{Object: "entity", ObjectID: "q-elinor", Op: "set_status", Patch: map[string]any{"status": "destroyed"}}}}},
-	}
-	p := RenderOrchestratorPrompt(domain.Meta{WorldName: "W"}, 3, snap, contradicting, nil, 0)
+	contradicting := []ProposalItem{{Ref: "p1", Author: "logographer:king-a", Event: domain.PropEvent{Title: "The healthy queen rides", Prose: "p",
+		Changes: []domain.Change{{Object: "entity", ObjectID: "q-elinor", Op: "set_status", Patch: map[string]any{"status": "destroyed"}}}}}}
+	p := RenderOrchestratorPrompt(domain.Meta{WorldName: "W"}, 3, snap, contradicting, nil).String()
 	for _, want := range []string{
 		"ENTITIES", "q-elinor", "health", "failing",
 		"region=king-a", "status=active",
@@ -470,22 +469,29 @@ func TestBindingRuleBeyondByteCapSurvives(t *testing.T) {
 		Beliefs:  []domain.Belief{{ID: "bl-1", RegionID: "king-a", Modality: "belief", Statement: strings.Repeat("noise ", 500)}},
 		Entities: []*domain.Entity{{ID: "e-1", Kind: "person", Name: strings.Repeat("name ", 300), RegionID: "king-a", Status: "active"}},
 	}
-	p := RenderLogographerPrompt(meta, 0, v, 4096)
+	prompt := RenderLogographerPrompt(meta, 0, v)
+	p, err := prompt.Fit("", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(p, "NO IRON MAY CROSS THE FORD.") {
 		t.Fatal("binding rule beyond byte 1200 was cut from the prompt")
 	}
 	// Tight budget: optional sections drop first, the binding rule stays.
-	p = RenderLogographerPrompt(meta, 0, v, 4000)
+	p, err = prompt.Fit("", 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(p, "NO IRON MAY CROSS THE FORD.") {
 		t.Fatal("binding rule dropped under budget pressure")
 	}
 	if strings.Contains(p, "noise") || strings.Contains(p, "name name") {
 		t.Fatal("optional sections should have been dropped first")
 	}
-	// Absurd budget: loud diagnostic, not silent amnesia.
-	p = RenderLogographerPrompt(meta, 0, v, 100)
-	if !strings.Contains(p, "cannot fit the mandatory") {
-		t.Fatal("missing mandatory-overflow diagnostic")
+	// Absurd budget: a visible budget error, never a trimmed rule.
+	var be *BudgetError
+	if _, err := prompt.Fit("", 100); !errors.As(err, &be) {
+		t.Fatalf("want BudgetError, got %v", err)
 	}
 }
 
@@ -504,7 +510,7 @@ func TestDeliveredReportsBoundedNewestFirst(t *testing.T) {
 			EventStep: i, DeliveredStep: 100 + i,
 		})
 	}
-	p := RenderLogographerPrompt(meta, 140, v, 0)
+	p := RenderLogographerPrompt(meta, 140, v).String()
 	i := strings.Index(p, "Fresh critical news")
 	if i < 0 {
 		t.Fatal("newest report missing")
@@ -517,20 +523,33 @@ func TestDeliveredReportsBoundedNewestFirst(t *testing.T) {
 	}
 }
 
-func TestFitPromptCeilingAfterAdditions(t *testing.T) {
-	base := strings.Repeat("context line\n", 100)
-	extra := "\nTHE ORCHESTRATOR ASKS YOU: why?\n"
-	got := FitPrompt(base, extra, 600)
-	if len(got) > 600 {
-		t.Fatalf("ceiling not enforced after additions: %d bytes", len(got))
+func TestFitNeverTrimsMandatoryForAdditions(t *testing.T) {
+	meta := domain.Meta{WorldName: "W", StartDate: "1000-01-01", StepDays: 7}
+	rule := strings.Repeat("rule ", 100) + "THE FORD IS CLOSED."
+	v := &knowledge.LogographerView{
+		Region:   &domain.Region{ID: "king-a", Name: "Kingdom A", Status: "active"},
+		Bindings: []domain.ReferenceDoc{{ID: "ref-law", Scope: "world", Title: "Ford Law", Binding: true, Body: rule}},
+		Entities: []*domain.Entity{{ID: "e-1", Kind: "person", Name: strings.Repeat("name ", 100), RegionID: "king-a", Status: "active"}},
 	}
-	if !strings.Contains(got, "why?") {
-		t.Fatal("late addition was cut instead of the base prompt")
+	prompt := RenderLogographerPrompt(meta, 0, v)
+	full := prompt.String()
+	extra := "\nCORRECTION: " + strings.Repeat("x", 300) + "\n"
+	// Room for the rule and the addition, not for the optional entities.
+	got, err := prompt.Fit(extra, len(full)+len(extra)-200)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(got, "section cut by byte ceiling") {
-		t.Fatal("truncation not marked")
+	if !strings.Contains(got, "THE FORD IS CLOSED.") || !strings.Contains(got, "CORRECTION") {
+		t.Fatal("rule or addition lost")
 	}
-	if len(base)+len(extra) <= 600 {
-		t.Fatal("fixture must exceed the ceiling")
+	if strings.Contains(got, "name name") {
+		t.Fatal("optional section should make room first")
+	}
+	// An addition too large for the remaining room is an error, and
+	// the rule is never sacrificed for it.
+	huge := strings.Repeat("y", len(full))
+	var be *BudgetError
+	if _, err := prompt.Fit(huge, len(full)); !errors.As(err, &be) {
+		t.Fatalf("want BudgetError, got %v", err)
 	}
 }

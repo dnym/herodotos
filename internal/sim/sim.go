@@ -112,7 +112,12 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 	st.viewPV = st.pv
 	st.viewPV.AllEvents = false
 
-	proposals := map[string][]domain.PropEvent{}
+	var items []agents.ProposalItem
+	addItems := func(author string, evs []domain.PropEvent) {
+		for _, ev := range evs {
+			items = append(items, agents.ProposalItem{Ref: fmt.Sprintf("p%d", len(items)+1), Author: author, Event: ev})
+		}
+	}
 	memories := map[string]*agents.MemoryUpdate{}
 	beliefs := map[string][]agents.BeliefRecord{}
 	propSeq := 0
@@ -153,9 +158,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			}
 		}
 		author := "logographer:" + regionID
-		if len(reply.Events) > 0 {
-			proposals[author] = append(proposals[author], reply.Events...)
-		}
+		addItems(author, reply.Events)
 		if reply.Memory != nil && reply.Memory.Summary != "" {
 			memories[regionID] = reply.Memory
 		}
@@ -173,8 +176,8 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 
 	var final *agents.OrchestratorReply
 	for round := 0; ; round++ {
-		interactions := agents.DetectInteractions(proposals)
-		prompt := agents.RenderOrchestratorPrompt(snap.Meta, currentStep, snap, proposals, interactions, b.MaxPromptBytes)
+		interactions := agents.DetectInteractions(agents.ProposalMap(items))
+		prompt := agents.RenderOrchestratorPrompt(snap.Meta, currentStep, snap, items, interactions)
 		// Once the reaction budget is spent, exactly one final
 		// adjudication call remains: it must resolve or pause. An
 		// unresolved reaction request is never a successful outcome.
@@ -232,9 +235,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 				return fail(fmt.Sprintf("region %s reaction failed", regionID), err)
 			}
 			author := "logographer:" + regionID
-			if len(reply2.Events) > 0 {
-				proposals[author] = append(proposals[author], reply2.Events...)
-			}
+			addItems(author, reply2.Events)
 			if reply2.Memory != nil && reply2.Memory.Summary != "" {
 				memories[regionID] = reply2.Memory
 			}
@@ -318,7 +319,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		// that never happened — keep the previous memory instead. A
 		// quiet step's assessments (no proposals) always stand; beliefs
 		// are in-world opinions and stand on their own.
-		if len(proposals["logographer:"+regionID]) > 0 && !represented[regionID] {
+		if len(agents.ProposalMap(items)["logographer:"+regionID]) > 0 && !represented[regionID] {
 			continue
 		}
 		plan.Memories = append(plan.Memories, domain.Memory{
@@ -349,17 +350,9 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		Step:       newStep,
 		EventIDs:   ids,
 		Notes:      final.Notes,
-		Proposals:  countProposals(proposals),
+		Proposals:  len(items),
 		ModelCalls: st.used,
 	}, nil
-}
-
-func countProposals(p map[string][]domain.PropEvent) int {
-	n := 0
-	for _, evs := range p {
-		n += len(evs)
-	}
-	return n
 }
 
 // affectedRegions derives the regions an event record should list: the
@@ -424,7 +417,7 @@ type stepRun struct {
 }
 
 func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *knowledge.LogographerView, extra string, premise []domain.Event) (*agents.LogographerReply, error) {
-	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view, s.b.MaxPromptBytes)
+	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view)
 	add := ""
 	if extra != "" {
 		add += "\nTHE ORCHESTRATOR ASKS YOU: " + extra + "\n"
@@ -463,7 +456,7 @@ func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *kno
 }
 
 func (s *stepRun) askConsult(ctx context.Context, regionID string, view *knowledge.LogographerView, docs []domain.ReferenceDoc) (*agents.LogographerReply, error) {
-	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view, s.b.MaxPromptBytes)
+	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view)
 	add := agents.RenderConsultSection(docs) +
 		"\nThese are the reference documents you asked for. Give your final answer now in the same JSON format; no further documents are available this step.\n"
 	var reply *agents.LogographerReply
@@ -492,7 +485,7 @@ func (s *stepRun) askConsult(ctx context.Context, regionID string, view *knowled
 	return reply, nil
 }
 
-func (s *stepRun) askOrchestrator(ctx context.Context, prompt string, reactionsOK, finalOnly bool) (*agents.OrchestratorReply, error) {
+func (s *stepRun) askOrchestrator(ctx context.Context, prompt agents.Prompt, reactionsOK, finalOnly bool) (*agents.OrchestratorReply, error) {
 	var reply *agents.OrchestratorReply
 	maxTok := s.b.MaxOutputTokensOrchestr
 	if maxTok <= 0 {
@@ -535,15 +528,24 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt string, reactionsO
 	return reply, nil
 }
 
+// maxDiagnosisBytes bounds correction feedback so a verbose validator
+// message cannot itself exhaust the prompt budget.
+const maxDiagnosisBytes = 1500
+
 // retryParse calls the model and feeds structured failures back for a
 // bounded number of correction rounds.
-func retryParse(s *stepRun, ctx context.Context, role, system, base, add string, temp float64, maxTokens int, validate func(string) error) error {
+func retryParse(s *stepRun, ctx context.Context, role, system string, base agents.Prompt, add string, temp float64, maxTokens int, validate func(string) error) error {
 	correction := ""
 	var lastErr error
 	for tries := 0; tries <= s.b.MaxCorrectionRetries; tries++ {
 		// The byte ceiling is applied after every addition — late
-		// extras and correction feedback included.
-		prompt := agents.FitPrompt(base, add+correction, s.b.MaxPromptBytes)
+		// extras and correction feedback included — by dropping
+		// optional context only. Mandatory material that cannot fit is
+		// an error before inference, never a trimmed rule.
+		prompt, err := base.Fit(add+correction, s.b.MaxPromptBytes)
+		if err != nil {
+			return fmt.Errorf("%s: %w", role, err)
+		}
 		text, truncated, err := s.call(ctx, role, system, prompt, temp, maxTokens)
 		if err != nil {
 			return err
@@ -561,6 +563,9 @@ func retryParse(s *stepRun, ctx context.Context, role, system, base, add string,
 			diagnosis = "your reply was cut off at the output limit, so the JSON is incomplete. " +
 				"Reply again with at most half the detail: fewer events, two short sentences per event prose, " +
 				"minimal patches. A complete smaller reply beats a rich truncated one."
+		}
+		if len(diagnosis) > maxDiagnosisBytes {
+			diagnosis = diagnosis[:maxDiagnosisBytes] + "..."
 		}
 		correction = "\n\nYour previous reply was rejected: " + diagnosis + "\nReply with only a corrected JSON object."
 	}

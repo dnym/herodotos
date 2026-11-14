@@ -170,7 +170,7 @@ func nextStepPrompt(t *testing.T, db *store.DB, ctx context.Context, regionID st
 	if err != nil {
 		t.Fatal(err)
 	}
-	return agents.RenderLogographerPrompt(snap.Meta, snap.Meta.ClockStep, view, 1<<20)
+	return agents.RenderLogographerPrompt(snap.Meta, snap.Meta.ClockStep, view).String()
 }
 
 func TestFullStepCommitsOneSharedHistory(t *testing.T) {
@@ -915,5 +915,33 @@ func TestBeliefBadInputFeedsCorrection(t *testing.T) {
 	snap, _ := db.LoadSnapshot(ctx)
 	if len(snap.Beliefs["king-a"]) != 1 || snap.Beliefs["king-a"][0].SubjectID != "" {
 		t.Fatalf("only the corrected belief should exist: %+v", snap.Beliefs["king-a"])
+	}
+}
+
+// A binding rule larger than the prompt ceiling is a visible budget
+// error before any inference call, with zero canonical change — never
+// a silently trimmed rule.
+func TestOversizedBindingRuleFailsBeforeInference(t *testing.T) {
+	db, ctx := setup(t)
+	if _, err := db.CreateReference(ctx, domain.ReferenceDoc{
+		Scope: "world", Title: "Ford Law", Binding: true,
+		Body: strings.Repeat("The ford is closed to iron. ", 400),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &inference.Scripted{}
+	b := config.DefaultBudgets()
+	b.MaxPromptBytes = 4000
+	e := &Engine{DB: db, Client: fake, ModelName: "fake", Budgets: b}
+	_, err := e.RunStep(ctx)
+	var be *agents.BudgetError
+	if !errors.As(err, &be) {
+		t.Fatalf("want a budget error, got %v", err)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Fatalf("no inference call may happen: %d calls", len(fake.Calls()))
+	}
+	if m, _ := db.GetMeta(ctx); m.ClockStep != 0 {
+		t.Fatalf("clock advanced: %d", m.ClockStep)
 	}
 }
