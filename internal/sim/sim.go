@@ -638,7 +638,7 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt agents.Prompt, rea
 				return err
 			}
 			for _, ds := range r.DirectiveStatus {
-				if s.snap.Directives[ds.ID] == nil {
+				if d := s.snap.Directives[ds.ID]; d == nil || d.Status == "withdrawn" {
 					return fmt.Errorf("unknown directive %q in directive_status", ds.ID)
 				}
 			}

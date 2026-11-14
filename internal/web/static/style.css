@@ -282,3 +282,7 @@ td.settings { font-family: var(--mono); font-size: .75rem; white-space: nowrap; 
 .status-withdrawn { color: var(--muted); text-decoration: line-through; }
 input.stepcount { width: 4.5em; }
 .flash.newstep { border-color: var(--bronze); }
+form.inlineform { display: inline; margin: 0; }
+button.small { font-size: .75rem; padding: .1rem .4rem; }
+details.dirlog { font-size: .8rem; margin-top: .3rem; }
+details.dirlog ul { margin: .2rem 0 0 1rem; padding: 0; }

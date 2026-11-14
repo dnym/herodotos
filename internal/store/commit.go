@@ -439,6 +439,9 @@ func applyDirectiveChange(ctx context.Context, tx execer, eventID string, ch dom
 	if ch.Op != "set_status" {
 		return fmt.Errorf("directive %s: unsupported op %q", ch.ObjectID, ch.Op)
 	}
+	if status == "withdrawn" {
+		return fmt.Errorf("directive %s is withdrawn; only a human can restore it", ch.ObjectID)
+	}
 	v, _ := ch.Patch["status"].(string)
 	if v != "pending" && v != "active" && v != "fulfilled" && v != "conflicting" {
 		return fmt.Errorf("directive %s: invalid status %q", ch.ObjectID, v)

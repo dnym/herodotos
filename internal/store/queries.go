@@ -182,17 +182,130 @@ func (d *DB) ListDirectives(ctx context.Context) ([]domain.Directive, error) {
 // describe the new text. The write and the creative-input revision bump
 // share one transaction, so any step that snapshotted the old rules
 // fails its commit check instead of adjudicating against changed ones.
-// Returns false when the id does not exist.
+// Returns false when the id does not exist or is withdrawn.
 func (d *DB) UpdateDirectiveText(ctx context.Context, id domain.ID, text string) (bool, error) {
 	return d.mutateWithRevisionBump(ctx, func(tx *sql.Tx) (bool, error) {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE directives SET text = ?, status = 'pending' WHERE id = ?`, text, id)
-		if err != nil {
+		var before string
+		err := tx.QueryRowContext(ctx, `SELECT text FROM directives WHERE id = ? AND status != 'withdrawn'`, id).Scan(&before)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		} else if err != nil {
 			return false, err
 		}
-		n, err := res.RowsAffected()
-		return n == 1, err
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE directives SET text = ?, status = 'pending' WHERE id = ?`, text, id); err != nil {
+			return false, err
+		}
+		return true, logDirectiveTx(ctx, tx, id, "reworded", before, text)
 	})
+}
+
+// SetDirectiveHard changes a directive between hard (binding unless
+// impossible) and soft (a preference). Weakening a hard directive is a
+// legitimate way to resolve a conflict that paused the world. The
+// status resets to pending: the old assessment was made against a
+// different obligation.
+func (d *DB) SetDirectiveHard(ctx context.Context, id domain.ID, hard bool) (bool, error) {
+	return d.mutateWithRevisionBump(ctx, func(tx *sql.Tx) (bool, error) {
+		var cur int
+		err := tx.QueryRowContext(ctx, `SELECT hard FROM directives WHERE id = ? AND status != 'withdrawn'`, id).Scan(&cur)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		} else if err != nil {
+			return false, err
+		}
+		want, change, before, after := 0, "softened", "hard", "soft"
+		if hard {
+			want, change, before, after = 1, "hardened", "soft", "hard"
+		}
+		if cur == want {
+			return false, nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE directives SET hard = ?, status = 'pending' WHERE id = ?`, want, id); err != nil {
+			return false, err
+		}
+		return true, logDirectiveTx(ctx, tx, id, change, before, after)
+	})
+}
+
+// WithdrawDirective retires a directive without deleting it: it stays
+// on record and in the log, but no agent sees it from the next step on.
+// RestoreDirective brings it back as pending.
+func (d *DB) WithdrawDirective(ctx context.Context, id domain.ID) (bool, error) {
+	return d.setDirectiveWithdrawn(ctx, id, true)
+}
+
+// RestoreDirective reverses a withdrawal.
+func (d *DB) RestoreDirective(ctx context.Context, id domain.ID) (bool, error) {
+	return d.setDirectiveWithdrawn(ctx, id, false)
+}
+
+func (d *DB) setDirectiveWithdrawn(ctx context.Context, id domain.ID, withdraw bool) (bool, error) {
+	return d.mutateWithRevisionBump(ctx, func(tx *sql.Tx) (bool, error) {
+		var status string
+		err := tx.QueryRowContext(ctx, `SELECT status FROM directives WHERE id = ?`, id).Scan(&status)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		} else if err != nil {
+			return false, err
+		}
+		if (status == "withdrawn") == withdraw {
+			return false, nil
+		}
+		next, change := "pending", "restored"
+		if withdraw {
+			next, change = "withdrawn", "withdrawn"
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE directives SET status = ? WHERE id = ?`, next, id); err != nil {
+			return false, err
+		}
+		return true, logDirectiveTx(ctx, tx, id, change, status, next)
+	})
+}
+
+func logDirectiveTx(ctx context.Context, tx execer, id domain.ID, change, before, after string) error {
+	var clock int
+	var v string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'clock_step'`).Scan(&v); err == nil {
+		fmt.Sscan(v, &clock)
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO directive_log(directive_id, at_step, change, before, after, utc) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, clock, change, nullable(before), nullable(after), utcNow())
+	return err
+}
+
+// DirectiveChange is one logged human change to a directive.
+type DirectiveChange struct {
+	DirectiveID domain.ID `json:"directive_id"`
+	AtStep      int       `json:"at_step"`
+	Change      string    `json:"change"`
+	Before      string    `json:"before,omitempty"`
+	After       string    `json:"after,omitempty"`
+	UTC         string    `json:"utc"`
+}
+
+// ListDirectiveLog returns every logged directive change, oldest first.
+func (d *DB) ListDirectiveLog(ctx context.Context) ([]DirectiveChange, error) {
+	return listDirectiveLog(ctx, d.sqlDB)
+}
+
+func listDirectiveLog(ctx context.Context, db qer) ([]DirectiveChange, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT directive_id, at_step, change, COALESCE(before,''), COALESCE(after,''), utc FROM directive_log ORDER BY seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DirectiveChange
+	for rows.Next() {
+		var c DirectiveChange
+		if err := rows.Scan(&c.DirectiveID, &c.AtStep, &c.Change, &c.Before, &c.After, &c.UTC); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // CreateDirective adds a new active directive and returns its id.
@@ -212,6 +325,9 @@ func (d *DB) CreateDirective(ctx context.Context, text string, hard bool) (strin
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO directives(id, text, hard, status) VALUES (?, ?, ?, 'active')`, id, text, h); err != nil {
+		return "", err
+	}
+	if err := logDirectiveTx(ctx, tx, id, "created", "", text); err != nil {
 		return "", err
 	}
 	if err := bumpRevisionTx(ctx, tx); err != nil {

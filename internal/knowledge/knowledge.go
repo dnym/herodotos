@@ -76,6 +76,9 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 		}
 	}
 	for _, d := range s.Directives {
+		if d.Status == "withdrawn" {
+			continue // on record for humans, retired for agents
+		}
 		v.Directives = append(v.Directives, *d)
 	}
 	sort.Slice(v.Directives, func(i, j int) bool { return v.Directives[i].ID < v.Directives[j].ID })

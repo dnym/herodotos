@@ -159,9 +159,15 @@ nothing canonical and is process-local by design.
 
 Directives are human creative direction with an explicit hard/soft
 classification and a status (`pending`, `active`, `fulfilled`,
-`conflicting`). The orchestrator may update statuses; agents may never
-touch directives at all. Humans can reword directives and add new ones
-from the overview. A hard directive that cannot be met is the pause
+`conflicting`, `withdrawn`). The orchestrator may update statuses
+(never to or from `withdrawn`); agents may never touch directives at
+all. Humans can add, reword, switch hard/soft, withdraw, and restore
+directives from the overview, so a conflict over a hard directive can
+be resolved by weakening or retiring it rather than inventing new text.
+A withdrawn directive stays on record but leaves every agent prompt.
+Each human change bumps the revision (a step in flight fails its
+commit check) and is appended to `directive_log`, which the overview
+shows per directive and the export includes. A hard directive that cannot be met is the pause
 trigger — the engine does not try to detect semantic contradictions
 itself; that judgment is the orchestrator's, and the human resolves it.
 

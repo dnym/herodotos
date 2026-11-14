@@ -21,6 +21,7 @@ type ExportBundle struct {
 	Entities      []domain.Entity       `json:"entities"`
 	Relationships []domain.Relationship `json:"relationships"`
 	Directives    []domain.Directive    `json:"directives"`
+	DirectiveLog  []DirectiveChange     `json:"directive_log"`
 	References    []domain.ReferenceDoc `json:"references"`
 	Events        []domain.Event        `json:"events"`
 	Reports       []domain.Report       `json:"reports"`
@@ -73,6 +74,9 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 	}
 	for _, id := range sortedDomainKeys(snap.Directives) {
 		b.Directives = append(b.Directives, *snap.Directives[id])
+	}
+	if b.DirectiveLog, err = listDirectiveLog(ctx, tx); err != nil {
+		return nil, err
 	}
 	b.References = append(b.References, snap.WorldRefs...)
 	for _, id := range sortedDomainKeys(snap.RegionRefs) {

@@ -35,21 +35,47 @@
 {{if $d.Snap.Directives}}
 <section>
   <h2>Directives</h2>
-  <p class="hint">Creative direction, not fact. You can reword directives here;
-  the historians never change them themselves.</p>
+  <p class="hint">Creative direction, not fact. You can reword, weaken, or withdraw
+  directives here — a conflict over a hard directive can be resolved without inventing
+  new text. The historians never change them; every human change is logged.</p>
   <table class="directives">
     <tr><th>id</th><th>kind</th><th>status</th><th>text</th></tr>
     {{range $id, $dir := $d.Snap.Directives}}
+    {{$withdrawn := eq $dir.Status "withdrawn"}}
     <tr>
       <td><code>{{$id}}</code></td>
-      <td>{{if $dir.Hard}}hard{{else}}soft{{end}}</td>
-      <td class="status-{{$dir.Status}}">{{$dir.Status}}</td>
       <td>
+        {{if $dir.Hard}}hard{{else}}soft{{end}}
+        {{if not $withdrawn}}
+        <form method="post" action="/directive/hard" class="inlineform">
+          <input type="hidden" name="id" value="{{$id}}">
+          <input type="hidden" name="hard" value="{{if $dir.Hard}}0{{else}}1{{end}}">
+          <button type="submit" class="secondary small">make {{if $dir.Hard}}soft{{else}}hard{{end}}</button>
+        </form>
+        {{end}}
+      </td>
+      <td class="status-{{$dir.Status}}">
+        {{$dir.Status}}
+        <form method="post" action="/directive/{{if $withdrawn}}restore{{else}}withdraw{{end}}" class="inlineform">
+          <input type="hidden" name="id" value="{{$id}}">
+          <button type="submit" class="secondary small">{{if $withdrawn}}restore{{else}}withdraw{{end}}</button>
+        </form>
+      </td>
+      <td>
+        {{if $withdrawn}}
+        <p class="status-withdrawn">{{$dir.Text}}</p>
+        {{else}}
         <form method="post" action="/directive/edit" class="dirform">
           <input type="hidden" name="id" value="{{$id}}">
           <textarea name="text" rows="2" maxlength="500">{{$dir.Text}}</textarea>
           <button type="submit" class="secondary">save</button>
         </form>
+        {{end}}
+        {{with index $d.DirectiveLog $id}}
+        <details class="dirlog"><summary>history ({{len .}})</summary>
+          <ul>{{range .}}<li>after step {{.AtStep}}: {{.Change}}{{if eq .Change "reworded"}} — was &ldquo;{{.Before}}&rdquo;{{end}} <span class="hint">{{.UTC}}</span></li>{{end}}</ul>
+        </details>
+        {{end}}
       </td>
     </tr>
     {{end}}

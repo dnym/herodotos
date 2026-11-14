@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dnym/herodotos/internal/agents"
 	"github.com/dnym/herodotos/internal/domain"
 	"github.com/dnym/herodotos/internal/inference"
+	"github.com/dnym/herodotos/internal/knowledge"
 	"github.com/dnym/herodotos/internal/sim"
 	"github.com/dnym/herodotos/internal/store"
 )
@@ -855,5 +857,58 @@ func TestPanelBoundedRunAndStaleNotice(t *testing.T) {
 	}
 	if frag := hxGet(t, ts, "/run/panel?seen=1"); strings.Contains(frag, "new step(s) committed") {
 		t.Fatal("stale notice shown for a current page")
+	}
+}
+
+// A hard directive can be weakened or withdrawn and restored, every
+// change is logged, and a withdrawn directive leaves agent prompts.
+func TestDirectiveRecovery(t *testing.T) {
+	s := newTestServer(t, false)
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+	ctx := context.Background()
+	postForm(t, ts, "/directive/add", url.Values{"text": {"The queen must die by midsummer."}, "hard": {"1"}}, "")
+
+	resp := postForm(t, ts, "/directive/hard", url.Values{"id": {"dir-000001"}, "hard": {"0"}}, "")
+	if msg, isErr := flashOf(t, resp); isErr || !strings.Contains(msg, "now soft") {
+		t.Fatalf("soften flash = %q", msg)
+	}
+	resp = postForm(t, ts, "/directive/withdraw", url.Values{"id": {"dir-000001"}}, "")
+	if msg, isErr := flashOf(t, resp); isErr || !strings.Contains(msg, "withdrawn") {
+		t.Fatalf("withdraw flash = %q", msg)
+	}
+	snap, _ := s.DB.LoadSnapshot(ctx)
+	if d := snap.Directives["dir-000001"]; d == nil || d.Hard || d.Status != "withdrawn" {
+		t.Fatalf("directive state: %+v", d)
+	}
+	view, err := knowledge.BuildLogographerView(ctx, snap, "king-a", s.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := agents.RenderLogographerPrompt(snap.Meta, snap.Meta.ClockStep, view).String(); strings.Contains(p, "midsummer") {
+		t.Fatal("withdrawn directive still reaches the historians")
+	}
+	if p := agents.RenderOrchestratorPrompt(snap.Meta, snap.Meta.ClockStep, snap, nil, nil).String(); strings.Contains(p, "midsummer") {
+		t.Fatal("withdrawn directive still reaches the orchestrator")
+	}
+	// Withdrawn directives cannot be reworded until restored.
+	resp = postForm(t, ts, "/directive/edit", url.Values{"id": {"dir-000001"}, "text": {"x"}}, "")
+	if _, isErr := flashOf(t, resp); !isErr {
+		t.Fatal("rewording a withdrawn directive should fail")
+	}
+	postForm(t, ts, "/directive/restore", url.Values{"id": {"dir-000001"}}, "")
+	log, err := s.DB.ListDirectiveLog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changes []string
+	for _, c := range log {
+		changes = append(changes, c.Change)
+	}
+	if got := strings.Join(changes, ","); got != "created,softened,withdrawn,restored" {
+		t.Fatalf("audit trail = %s", got)
+	}
+	if body := get(t, ts, "/", http.StatusOK); !strings.Contains(body, "history (4)") {
+		t.Fatal("directive history not shown")
 	}
 }

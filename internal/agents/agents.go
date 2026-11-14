@@ -613,6 +613,9 @@ func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Sna
 	var directives strings.Builder
 	for _, id := range sortedIDs(mapKeys(snap.Directives)) {
 		d := snap.Directives[id]
+		if d.Status == "withdrawn" {
+			continue
+		}
 		kind := "soft"
 		if d.Hard {
 			kind = "hard"
@@ -1031,7 +1034,7 @@ func (pv *ProposalValidator) validateFinal(ev *domain.PropEvent, c *candidate) e
 				return fmt.Errorf("relationship %q does not exist", ch.ObjectID)
 			}
 		case "directive":
-			if pv.Snap.Directives[ch.ObjectID] == nil {
+			if d := pv.Snap.Directives[ch.ObjectID]; d == nil || d.Status == "withdrawn" {
 				return fmt.Errorf("directive %q does not exist", ch.ObjectID)
 			}
 		default:

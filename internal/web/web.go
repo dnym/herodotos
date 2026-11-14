@@ -119,6 +119,9 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /run/resume", mutation(s.actionResumeWorld))
 	mux.Handle("POST /directive/edit", mutation(s.actionDirectiveEdit))
 	mux.Handle("POST /directive/add", mutation(s.actionDirectiveAdd))
+	mux.Handle("POST /directive/hard", mutation(s.actionDirectiveHard))
+	mux.Handle("POST /directive/withdraw", mutation(s.actionDirectiveWithdraw))
+	mux.Handle("POST /directive/restore", mutation(s.actionDirectiveRestore))
 	mux.Handle("POST /reference/add", mutation(s.actionReferenceAdd))
 	mux.Handle("POST /reference/update", mutation(s.actionReferenceUpdate))
 	mux.Handle("POST /reference/delete", mutation(s.actionReferenceDelete))
@@ -411,6 +414,77 @@ func (s *Server) actionDirectiveAdd(w http.ResponseWriter, r *http.Request) {
 	redirectFlash(w, r, "/", "directive "+id+" added ("+kind+")", false)
 }
 
+// actionDirectiveHard switches a directive between hard and soft.
+// Weakening a hard directive is a first-class way to resolve the
+// conflict that paused the world; resuming stays a separate, explicit
+// act.
+func (s *Server) actionDirectiveHard(w http.ResponseWriter, r *http.Request) {
+	if s.editingDuringRun() {
+		redirectFlash(w, r, "/", "the world is mid-step: pause and wait for the step boundary before changing directives", true)
+		return
+	}
+	id := r.FormValue("id")
+	hard := r.FormValue("hard") == "1"
+	if !domain.ValidID(id) {
+		redirectFlash(w, r, "/", "invalid directive id", true)
+		return
+	}
+	ok, err := s.DB.SetDirectiveHard(r.Context(), domain.ID(id), hard)
+	if err != nil {
+		redirectFlash(w, r, "/", "update failed: "+err.Error(), true)
+		return
+	}
+	if !ok {
+		redirectFlash(w, r, "/", "directive "+id+" is unknown, withdrawn, or already that kind", true)
+		return
+	}
+	kind := "soft"
+	if hard {
+		kind = "hard"
+	}
+	redirectFlash(w, r, "/", "directive "+id+" is now "+kind+" (status reset to pending)", false)
+}
+
+func (s *Server) actionDirectiveWithdraw(w http.ResponseWriter, r *http.Request) {
+	s.directiveWithdrawal(w, r, true)
+}
+
+func (s *Server) actionDirectiveRestore(w http.ResponseWriter, r *http.Request) {
+	s.directiveWithdrawal(w, r, false)
+}
+
+func (s *Server) directiveWithdrawal(w http.ResponseWriter, r *http.Request, withdraw bool) {
+	if s.editingDuringRun() {
+		redirectFlash(w, r, "/", "the world is mid-step: pause and wait for the step boundary before changing directives", true)
+		return
+	}
+	id := r.FormValue("id")
+	if !domain.ValidID(id) {
+		redirectFlash(w, r, "/", "invalid directive id", true)
+		return
+	}
+	var ok bool
+	var err error
+	if withdraw {
+		ok, err = s.DB.WithdrawDirective(r.Context(), domain.ID(id))
+	} else {
+		ok, err = s.DB.RestoreDirective(r.Context(), domain.ID(id))
+	}
+	if err != nil {
+		redirectFlash(w, r, "/", "update failed: "+err.Error(), true)
+		return
+	}
+	if !ok {
+		redirectFlash(w, r, "/", "no change: directive "+id+" is unknown or already in that state", true)
+		return
+	}
+	if withdraw {
+		redirectFlash(w, r, "/", "directive "+id+" withdrawn: kept on record, no longer shown to the historians", false)
+	} else {
+		redirectFlash(w, r, "/", "directive "+id+" restored as pending", false)
+	}
+}
+
 // --- reference documents (human-authored creative direction) ---
 
 func (s *Server) pageReferences(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +649,8 @@ type overviewData struct {
 	Pending int
 	Panel   panelData
 	Attrs   map[domain.ID][]string // region id -> "key: value" lines
+	// DirectiveLog groups the human change log by directive id.
+	DirectiveLog map[domain.ID][]store.DirectiveChange
 }
 
 // attrLines renders a map as deterministic "key: value" lines; Go map
@@ -616,6 +692,12 @@ func (s *Server) pageOverview(w http.ResponseWriter, r *http.Request) {
 			if rp.Report.DeliveredStep == 0 {
 				od.Pending++
 			}
+		}
+	}
+	if log, err := s.DB.ListDirectiveLog(ctx); err == nil {
+		od.DirectiveLog = map[domain.ID][]store.DirectiveChange{}
+		for _, c := range log {
+			od.DirectiveLog[c.DirectiveID] = append(od.DirectiveLog[c.DirectiveID], c)
 		}
 	}
 	s.render(w, "overview", snap.Meta.WorldName, r, od)
