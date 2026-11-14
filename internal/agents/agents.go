@@ -57,13 +57,17 @@ type LogographerReply struct {
 	Recall []string `json:"recall,omitempty"`
 }
 
-// ReactionRequest is one request for a regional reaction. The premise
-// names the canonical events the question rests on, so the engine can
-// verify the responding region could actually know them: a reaction
-// must not become a side channel for not-yet-delivered news.
+// ReactionRequest asks one region to decide its response. It carries
+// no free text: an omniscient orchestrator's prose could disclose
+// anything. The engine itself authors the request from what the region
+// may know — canonical premise events it witnessed or received, and
+// current-step encounters: other regions' proposals that declare the
+// region an observer, shown in the account declared for it. Encounters
+// stay provisional; they become knowledge only if the final event keeps
+// the region as an observer.
 type ReactionRequest struct {
-	Question string      `json:"question"`
-	Premise  []domain.ID `json:"premise"`
+	Premise    []domain.ID `json:"premise,omitempty"`
+	Encounters []string    `json:"encounters,omitempty"` // proposal refs (p1, p2, ...)
 }
 
 // OrchestratorReply is a parsed adjudication reply.
@@ -167,8 +171,8 @@ func validateBeliefs(bs []BeliefRecord) error {
 func ParseOrchestratorReply(text string) (*OrchestratorReply, error) {
 	var r OrchestratorReply
 	if err := decodeStrictJSON(text, &r); err != nil {
-		if strings.Contains(err.Error(), "reactions") {
-			return nil, fmt.Errorf("invalid reply: %w; reactions must be {\"region id\": {\"question\": \"...\", \"premise\": [\"evt-...\"]}} naming canonical events the region can already know", err)
+		if strings.Contains(err.Error(), "reactions") || strings.Contains(err.Error(), "question") {
+			return nil, fmt.Errorf("invalid reply: %w; reactions must be {\"region id\": {\"premise\": [\"evt-...\"], \"encounters\": [\"p3\"]}} — no question text: the engine writes the request from events the region can already know and proposals that name it as an observer", err)
 		}
 		return nil, fmt.Errorf("invalid reply: %w", err)
 	}
@@ -189,8 +193,8 @@ func ParseOrchestratorReply(text string) (*OrchestratorReply, error) {
 		}
 	}
 	for region, rx := range r.Reactions {
-		if strings.TrimSpace(rx.Question) == "" {
-			return nil, fmt.Errorf("reaction for %s: question must not be empty", region)
+		if len(rx.Premise) == 0 && len(rx.Encounters) == 0 {
+			return nil, fmt.Errorf("reaction for %s needs a premise (canonical events it knows) or encounters (proposal refs naming it as an observer)", region)
 		}
 		for _, id := range rx.Premise {
 			if !domain.ValidID(id) {
@@ -1185,21 +1189,73 @@ func (pv *ProposalValidator) checkAccess(origin domain.ID, ev *domain.PropEvent)
 	return nil
 }
 
-// ValidateReaction checks one reaction request: the region must exist
-// and every premise event must be observable by that region now.
-func (pv *ProposalValidator) ValidateReaction(regionID domain.ID, rx ReactionRequest) error {
+// ValidateReaction checks one reaction request: the region must exist,
+// every premise event must be knowable by that region now, and every
+// encounter must be another region's proposal this step that declares
+// the region an observer. That is the whole disclosure: the request
+// carries no orchestrator prose.
+func (pv *ProposalValidator) ValidateReaction(regionID domain.ID, rx ReactionRequest, items []ProposalItem) error {
 	if pv.Snap.Regions[regionID] == nil {
 		return fmt.Errorf("reaction target %q is not a region", regionID)
 	}
-	if len(rx.Premise) == 0 {
-		return fmt.Errorf("reaction for %q needs a premise: name at least one canonical event that region witnessed or received by report", regionID)
+	if len(rx.Premise) == 0 && len(rx.Encounters) == 0 {
+		return fmt.Errorf("reaction for %q needs a premise (canonical events that region witnessed or received by report) or encounters (this step's proposals that list it as an observer)", regionID)
 	}
 	for _, id := range rx.Premise {
 		if !pv.CanObserveEvent(regionID, id) {
 			return fmt.Errorf("reaction for %q: premise event %q is not knowable by that region yet (events it witnessed or reports delivered to it only)", regionID, id)
 		}
 	}
+	for _, ref := range rx.Encounters {
+		it := findItem(items, ref)
+		if it == nil {
+			return fmt.Errorf("reaction for %q: encounter %q is not a proposal of this step", regionID, ref)
+		}
+		if it.Author == "logographer:"+regionID {
+			return fmt.Errorf("reaction for %q: encounter %q is that region's own proposal", regionID, ref)
+		}
+		if !contains(it.Event.Observers, regionID) {
+			return fmt.Errorf("reaction for %q: proposal %q does not list that region as an observer, so it has not witnessed it", regionID, ref)
+		}
+	}
 	return nil
+}
+
+func findItem(items []ProposalItem, ref string) *ProposalItem {
+	for i := range items {
+		if items[i].Ref == ref {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+// ReactionEvidence is what a reaction request discloses: canonical
+// events as the region knows them, and provisional encounters in the
+// account declared for the region.
+type ReactionEvidence struct {
+	Known      []domain.Event
+	Encounters []domain.Event // provisional: Title/Prose as witnessed
+}
+
+// RenderReactionRequest is the application-authored decision request.
+func RenderReactionRequest(ev ReactionEvidence) string {
+	var b strings.Builder
+	b.WriteString("\n\nA DECISION IS NEEDED FROM YOUR REGION THIS STEP.\n")
+	if len(ev.Encounters) > 0 {
+		b.WriteString("Your people are witnessing, right now (not yet settled history; it may still turn out otherwise):\n")
+		for _, e := range ev.Encounters {
+			fmt.Fprintf(&b, "- %s: %s\n", e.Title, e.Prose)
+		}
+	}
+	if len(ev.Known) > 0 {
+		b.WriteString("Known to your region already:\n")
+		for _, e := range ev.Known {
+			fmt.Fprintf(&b, "- %s step %d: %s: %s\n", e.ID, e.Step, e.Title, e.Prose)
+		}
+	}
+	b.WriteString("Decide how your region responds, if at all, acting only within your own authority. Answer with the same JSON format; do not use \"consult\" or \"recall\" now.\n")
+	return b.String()
 }
 
 // --- interaction detection ---

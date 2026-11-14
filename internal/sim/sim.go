@@ -141,7 +141,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		if err != nil {
 			return fail("build view", err)
 		}
-		reply, err := st.askLogographer(ctx, regionID, view, "", nil)
+		reply, err := st.askLogographer(ctx, regionID, view, "")
 		if err != nil {
 			return fail(fmt.Sprintf("region %s proposal failed", regionID), err)
 		}
@@ -186,6 +186,10 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		}
 	}
 
+	// shown records, per region, the provisional encounters a reaction
+	// request disclosed; memory written after seeing them depends on
+	// how they are adjudicated.
+	shown := map[domain.ID][]string{}
 	var final *agents.OrchestratorReply
 	for round := 0; ; round++ {
 		interactions := agents.DetectInteractions(agents.ProposalMap(items))
@@ -194,7 +198,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		// adjudication call remains: it must resolve or pause. An
 		// unresolved reaction request is never a successful outcome.
 		finalOnly := round >= b.MaxReactionRounds
-		reply, err := st.askOrchestrator(ctx, prompt, !finalOnly, finalOnly)
+		reply, err := st.askOrchestrator(ctx, prompt, !finalOnly, finalOnly, items)
 		if err != nil {
 			return fail("orchestrator failed", err)
 		}
@@ -232,17 +236,30 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			if err != nil {
 				return fail("build reaction view", err)
 			}
-			question := reply.Reactions[regionID].Question
-			var premise []domain.Event
-			for _, id := range reply.Reactions[regionID].Premise {
-				for _, ev := range snap.RecentEvents {
-					if ev.ID == id {
-						premise = append(premise, ev)
-						break
+			rx := reply.Reactions[regionID]
+			var evidence agents.ReactionEvidence
+			for _, id := range rx.Premise {
+				ev, gerr := e.DB.GetEvent(ctx, id)
+				if gerr != nil {
+					return fail("load reaction premise", gerr)
+				}
+				account, _ := knowledge.AccountFor(snap, domain.ID(regionID), id)
+				evidence.Known = append(evidence.Known, knowledge.AsKnown(ev, account))
+			}
+			for _, ref := range rx.Encounters {
+				for _, it := range items {
+					if it.Ref != ref {
+						continue
 					}
+					seen := domain.Event{Title: it.Event.Title, Prose: it.Event.Prose}
+					if a := it.Event.Accounts[regionID]; a != "" {
+						seen = domain.Event{Title: "What your people see", Prose: a}
+					}
+					evidence.Encounters = append(evidence.Encounters, seen)
+					shown[domain.ID(regionID)] = append(shown[domain.ID(regionID)], ref)
 				}
 			}
-			reply2, err := st.askLogographer(ctx, regionID, view, question, premise)
+			reply2, err := st.askLogographer(ctx, regionID, view, agents.RenderReactionRequest(evidence))
 			if err != nil {
 				return fail(fmt.Sprintf("region %s reaction failed", regionID), err)
 			}
@@ -473,19 +490,8 @@ type stepRun struct {
 	used   int
 }
 
-func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *knowledge.LogographerView, extra string, premise []domain.Event) (*agents.LogographerReply, error) {
+func (s *stepRun) askLogographer(ctx context.Context, regionID string, view *knowledge.LogographerView, add string) (*agents.LogographerReply, error) {
 	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view)
-	add := ""
-	if extra != "" {
-		add += "\nTHE ORCHESTRATOR ASKS YOU: " + extra + "\n"
-		if len(premise) > 0 {
-			add += "The question rests on events you can see in your own history or delivered reports:\n"
-			for _, ev := range premise {
-				add += fmt.Sprintf("- %s step %d: %s: %s\n", ev.ID, ev.Step, ev.Title, ev.Prose)
-			}
-		}
-		add += "Answer with the same JSON format, reacting only within your authority.\n"
-	}
 	var reply *agents.LogographerReply
 	err := retryParse(s, ctx, "logographer:"+regionID, agents.SystemLogographer(), prompt, add, 0.8, s.b.MaxOutputTokens,
 		func(text string) error {
@@ -540,7 +546,7 @@ func (s *stepRun) askFollowUp(ctx context.Context, regionID string, view *knowle
 	return reply, nil
 }
 
-func (s *stepRun) askOrchestrator(ctx context.Context, prompt agents.Prompt, reactionsOK, finalOnly bool) (*agents.OrchestratorReply, error) {
+func (s *stepRun) askOrchestrator(ctx context.Context, prompt agents.Prompt, reactionsOK, finalOnly bool, items []agents.ProposalItem) (*agents.OrchestratorReply, error) {
 	var reply *agents.OrchestratorReply
 	maxTok := s.b.MaxOutputTokensOrchestr
 	if maxTok <= 0 {
@@ -567,7 +573,7 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt agents.Prompt, rea
 			}
 			if reactionsOK {
 				for region, rx := range r.Reactions {
-					if err := s.pv.ValidateReaction(domain.ID(region), rx); err != nil {
+					if err := s.pv.ValidateReaction(domain.ID(region), rx, items); err != nil {
 						return err
 					}
 				}

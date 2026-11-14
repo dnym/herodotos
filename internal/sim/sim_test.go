@@ -453,7 +453,7 @@ func TestReactionRound(t *testing.T) {
 	bScare := `{"prose":"Watchfires on the march.","events":[{"type":"development","title":"Watchfires on the march","prose":"B's march wards light signal fires.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"mood":"grim"}}]}],"memory":{"summary":"Watchfires lit."}}`
 	orchScare := `{"notes":"A local alert.","events":[{"origin":"prin-b","type":"development","title":"Watchfires on the march","prose":"B's march wards light signal fires.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"mood":"grim"}}]}]}`
 	prinReact := `{"prose":"The principality mobilizes cautiously.","events":[{"type":"interaction","title":"Border guards on alert","prose":"B's garrisons watch the frontier.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alert":"elevated"}}]}],"memory":{"summary":"Alert on the border."}}`
-	orch1 := `{"notes":"need B's reaction","events":[],"reactions":{"prin-b":{"question":"How does your principality respond to its own watchfire scare?","premise":["evt-000001"]}}}`
+	orch1 := `{"notes":"need B's reaction","events":[],"reactions":{"prin-b":{"premise":["evt-000001"]}}}`
 	orch2 := `{"notes":"Merged the reaction.","events":[{"origin":"prin-b","type":"interaction","title":"Border guards on alert","prose":"B's garrisons watch the frontier.","causes":["evt-000001"],"changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alert":"elevated"}}]}]}`
 	fake := &inference.Scripted{Replies: []inference.Reply{
 		{Role: "logographer:king-a", Text: prinQuiet},
@@ -485,10 +485,10 @@ func TestReactionRound(t *testing.T) {
 	// The reaction question and its disclosed premise must have been
 	// delivered to B's historian.
 	rc := fake.Calls()[6] // prin-b's reaction call
-	if !strings.Contains(rc.Prompt, "respond to its own watchfire scare") {
-		t.Fatal("orchestrator question missing from reaction prompt")
+	if !strings.Contains(rc.Prompt, "A DECISION IS NEEDED") {
+		t.Fatal("application-authored decision request missing from reaction prompt")
 	}
-	if !strings.Contains(rc.Prompt, "events you can see in your own history") {
+	if !strings.Contains(rc.Prompt, "Known to your region already") || !strings.Contains(rc.Prompt, "B's march wards light signal fires.") {
 		t.Fatal("reaction premise disclosure missing from prompt")
 	}
 }
@@ -499,7 +499,7 @@ func TestReactionPremiseCannotLeakDelayedNews(t *testing.T) {
 	// Step 2: the orchestrator tries to ask prin-b about it — the
 	// premise is not knowable yet, so the correction round must teach
 	// that, and no reaction call may happen.
-	orchSecretTooEarly := `{"notes":"ask B","events":[],"reactions":{"prin-b":{"question":"How does the principality react to the rioting?","premise":["evt-000001"]}}}`
+	orchSecretTooEarly := `{"notes":"ask B","events":[],"reactions":{"prin-b":{"premise":["evt-000001"]}}}`
 	orchCorrected := `{"notes":"ask nothing","events":[]}`
 	fake := &inference.Scripted{Replies: []inference.Reply{
 		{Role: "logographer:king-a", Text: kingReply},
@@ -521,7 +521,7 @@ func TestReactionPremiseCannotLeakDelayedNews(t *testing.T) {
 	}
 	// No reaction to the secret ever reached a historian.
 	for _, c := range fake.Calls() {
-		if strings.Contains(c.Prompt, "ORCHESTRATOR ASKS YOU") {
+		if strings.Contains(c.Prompt, "A DECISION IS NEEDED") {
 			t.Fatal("reaction call leaked undelivered news")
 		}
 	}
@@ -547,7 +547,7 @@ func TestReactionBudgetExhaustedForcesFinalAdjudication(t *testing.T) {
 	// Step 2: the orchestrator asks twice (rounds 0 and 1 within the
 	// budget of 2), then at the final adjudication call it still tries
 	// to ask — rejected in-turn, and it resolves instead.
-	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"question":"Close the ford too?","premise":["evt-000001"]}}}`
+	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"premise":["evt-000001"]}}}`
 	resolve := `{"notes":"Resolved without asking.","events":[{"origin":"prin-b","type":"interaction","title":"The ford is shut","prose":"Garrisons bar the crossing.","causes":["evt-000001"],"changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"ford":"shut"}}]}]}`
 	fake := &inference.Scripted{Replies: []inference.Reply{
 		{Role: "logographer:king-a", Text: prinQuiet},
@@ -585,7 +585,7 @@ func TestReactionBudgetPersistentAskingFailsAttempt(t *testing.T) {
 	}}}).RunStep(ctx); err != nil {
 		t.Fatal(err)
 	}
-	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"question":"Close the ford too?","premise":["evt-000001"]}}}`
+	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"premise":["evt-000001"]}}}`
 	// Exhaust the reaction budget with requests, then keep asking at the
 	// final call until correction retries run out.
 	fake := &inference.Scripted{Replies: []inference.Reply{
@@ -619,7 +619,7 @@ func TestZeroReactionBudgetRejectsAnyRequest(t *testing.T) {
 	db, ctx := setup(t)
 	b := config.DefaultBudgets()
 	b.MaxReactionRounds = 0
-	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"question":"why?","premise":["evt-000001"]}}}`
+	ask := `{"notes":"need an answer","events":[],"reactions":{"prin-b":{"premise":["evt-000001"]}}}`
 	fake := &inference.Scripted{Replies: []inference.Reply{
 		{Role: "logographer:king-a", Text: prinQuiet},
 		{Role: "logographer:prin-b", Text: prinQuiet},
@@ -1090,5 +1090,40 @@ func TestNewEntityParticipatesInItsCreation(t *testing.T) {
 	snap, _ := db.LoadSnapshot(ctx)
 	if p := snap.Entities["prince-a"]; p == nil || p.Attrs["title"] != "heir" {
 		t.Fatalf("created entity missing or not updated: %+v", p)
+	}
+}
+
+// In the very first step there is no canonical premise, yet a directly
+// witnessed border encounter can solicit a reaction — disclosed only in
+// the account the proposer declared for the witness.
+func TestFirstStepEncounterReaction(t *testing.T) {
+	db, ctx := setup(t)
+	riders := `{"type":"conflict","title":"Raid prepared at the ford","prose":"Elinor secretly orders a raid to seize B's salt stores.","observers":["prin-b"],"accounts":{"prin-b":"Armed riders gather on the far bank of the ford."}}`
+	kingRaid := `{"prose":"A raid.","events":[` + riders + `]}`
+	prinReact := `{"prose":"B answers.","events":[{"type":"interaction","title":"Ford watch doubled","prose":"B doubles the ford watch.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alert":"high"}}]}]}`
+	orchAsk := `{"notes":"B must decide.","events":[],"reactions":{"prin-b":{"encounters":["p1"]}}}`
+	orchFinal := `{"notes":"Merged.","events":[` + strings.Replace(riders, `{"type"`, `{"origin":"king-a","type"`, 1) + `,{"origin":"prin-b","type":"interaction","title":"Ford watch doubled","prose":"B doubles the ford watch.","changes":[{"object":"region","object_id":"prin-b","op":"set_attrs","patch":{"alert":"high"}}]}]}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingRaid},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchAsk},
+		{Role: "logographer:prin-b", Text: prinReact},
+		{Role: "orchestrator", Text: orchFinal},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	rc := fake.Calls()[3].Prompt
+	if !strings.Contains(rc, "Armed riders gather on the far bank") {
+		t.Fatalf("encounter account missing:\n%s", rc)
+	}
+	if strings.Contains(rc, "secretly orders") || strings.Contains(rc, "salt stores") {
+		t.Fatal("reaction request leaked the proposer's private prose")
+	}
+	// After commitment, B knows the raid as witnessed — the account —
+	// and A knows its own full account.
+	if p := nextStepPrompt(t, db, ctx, "prin-b"); !strings.Contains(p, "Armed riders") || strings.Contains(p, "salt stores") {
+		t.Fatalf("observer's knowledge wrong:\n%s", p)
 	}
 }

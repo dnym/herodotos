@@ -150,6 +150,21 @@ func AsKnown(ev domain.Event, account string) domain.Event {
 	return ev
 }
 
+// AccountFor returns the account through which a region knows an event:
+// its observation if it witnessed it, else a delivered report. ok is
+// false when the region does not know the event at all.
+func AccountFor(s *store.Snapshot, regionID, eventID domain.ID) (account string, ok bool) {
+	if a, seen := s.Observed[regionID][eventID]; seen {
+		return a, true
+	}
+	for _, rep := range s.DeliveredReports[regionID] {
+		if rep.EventID == eventID {
+			return rep.Account, true
+		}
+	}
+	return "", false
+}
+
 // maxRecallQueries and maxRecallResults bound one history lookup.
 const (
 	maxRecallQueries = 3

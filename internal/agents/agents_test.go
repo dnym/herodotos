@@ -301,14 +301,20 @@ func TestLegacyStringReactionRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("string reaction accepted")
 	}
-	if !strings.Contains(err.Error(), "question") || !strings.Contains(err.Error(), "premise") {
+	if !strings.Contains(err.Error(), "encounters") || !strings.Contains(err.Error(), "premise") {
 		t.Errorf("parse error must teach the envelope: %v", err)
 	}
-	if _, err := ParseOrchestratorReply(`{"notes":"n","events":[],"reactions":{"prin-b":{"question":"why?","premise":["evt-000001"]}}}`); err != nil {
+	if _, err := ParseOrchestratorReply(`{"notes":"n","events":[],"reactions":{"prin-b":{"premise":["evt-000001"]}}}`); err != nil {
 		t.Errorf("valid structured reaction rejected: %v", err)
 	}
-	if _, err := ParseOrchestratorReply(`{"notes":"n","events":[],"reactions":{"prin-b":{"question":"","premise":["evt-000001"]}}}`); err == nil {
-		t.Error("empty question accepted")
+	// Free question text is no longer a channel: it fails to parse and
+	// the error teaches the structured form.
+	_, err = ParseOrchestratorReply(`{"notes":"n","events":[],"reactions":{"prin-b":{"question":"A will invade you tomorrow; how do you mobilize?","premise":["evt-000001"]}}}`)
+	if err == nil || !strings.Contains(err.Error(), "no question text") {
+		t.Errorf("question text accepted or untaught: %v", err)
+	}
+	if _, err := ParseOrchestratorReply(`{"notes":"n","events":[],"reactions":{"prin-b":{}}}`); err == nil {
+		t.Error("empty reaction accepted")
 	}
 }
 
@@ -328,27 +334,57 @@ func TestReactionPremiseVisibility(t *testing.T) {
 		},
 	}
 	pv := &ProposalValidator{Snap: snap, CurrentStep: 2}
-	if err := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000001"}}); err != nil {
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{Premise: []domain.ID{"evt-000001"}}, nil); err != nil {
 		t.Errorf("involved event rejected: %v", err)
 	}
-	if err := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000002"}}); err != nil {
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{Premise: []domain.ID{"evt-000002"}}, nil); err != nil {
 		t.Errorf("delivered report event rejected: %v", err)
 	}
-	if err := pv.ValidateReaction("king-a", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000002"}}); err != nil {
+	if err := pv.ValidateReaction("king-a", ReactionRequest{Premise: []domain.ID{"evt-000002"}}, nil); err != nil {
 		t.Errorf("own event rejected: %v", err)
 	}
-	bad := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-999999"}})
+	bad := pv.ValidateReaction("prin-b", ReactionRequest{Premise: []domain.ID{"evt-999999"}}, nil)
 	if bad == nil {
 		t.Fatal("unknown premise event accepted")
 	}
 	if !strings.Contains(bad.Error(), "not knowable") {
 		t.Errorf("error must teach visibility rules: %v", bad)
 	}
-	if err := pv.ValidateReaction("prin-b", ReactionRequest{Question: "q"}); err == nil {
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{}, nil); err == nil {
 		t.Error("premise-less reaction accepted")
 	}
-	if err := pv.ValidateReaction("nowhere", ReactionRequest{Question: "q", Premise: []domain.ID{"evt-000001"}}); err == nil {
+	if err := pv.ValidateReaction("nowhere", ReactionRequest{Premise: []domain.ID{"evt-000001"}}, nil); err == nil {
 		t.Error("unknown reaction target accepted")
+	}
+}
+
+// A reaction can rest on a current-step encounter (no canonical premise
+// exists in step 1), but only when the proposing region declared the
+// target an observer.
+func TestReactionEncounters(t *testing.T) {
+	snap := &store.Snapshot{Regions: map[domain.ID]*domain.Region{"king-a": {ID: "king-a"}, "prin-b": {ID: "prin-b"}}}
+	pv := &ProposalValidator{Snap: snap}
+	items := []ProposalItem{
+		{Ref: "p1", Author: "logographer:king-a", Event: domain.PropEvent{Title: "Riders at the ford", Observers: []domain.ID{"prin-b"},
+			Accounts: map[string]string{"prin-b": "Armed riders gather across the ford."}}},
+		{Ref: "p2", Author: "logographer:king-a", Event: domain.PropEvent{Title: "Secret invasion plan"}},
+	}
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{Encounters: []string{"p1"}}, items); err != nil {
+		t.Fatalf("witnessed encounter rejected: %v", err)
+	}
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{Encounters: []string{"p2"}}, items); err == nil {
+		t.Fatal("unwitnessed proposal accepted as encounter")
+	}
+	if err := pv.ValidateReaction("king-a", ReactionRequest{Encounters: []string{"p1"}}, items); err == nil {
+		t.Fatal("own proposal accepted as encounter")
+	}
+	if err := pv.ValidateReaction("prin-b", ReactionRequest{Encounters: []string{"p9"}}, items); err == nil {
+		t.Fatal("unknown encounter accepted")
+	}
+	// The request text is the engine's own; only the evidence varies.
+	req := RenderReactionRequest(ReactionEvidence{Encounters: []domain.Event{{Title: "What your people see", Prose: "Armed riders gather across the ford."}}})
+	if !strings.Contains(req, "Armed riders") || !strings.Contains(req, "not yet settled history") {
+		t.Fatalf("request: %s", req)
 	}
 }
 

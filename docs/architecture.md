@@ -56,6 +56,18 @@ web layer and the CLI are both thin callers of `sim.Engine.RunStep`.
   keyword queries, answered in the same single follow-up call as
   `consult` from the region's own record (at most eight entries,
   matched against the version the region knows).
+- Reaction requests carry no orchestrator prose. The orchestrator names
+  only evidence — `premise` events the region already knows, and
+  `encounters`: this step's proposals (by their `p1`, `p2`, ... refs)
+  that list the region as an observer — and the engine writes the
+  decision request itself, showing each item in the version the region
+  knows (its observation or report account; for an encounter, the
+  account the proposer declared for it). Encounters let a first-step
+  border clash solicit a reaction; they stay provisional and become
+  knowledge only if the final event keeps the region as an observer.
+  The limit: a proposer that lists an observer without an account
+  discloses its full proposal prose to that observer; the prompts ask
+  for accounts, but the engine cannot judge whether prose is private.
 - News timing is a code-enforced baseline, not a transport
   simulation. A report's earliest step must be at least one step after
   the event and no earlier than the shortest connection route from any

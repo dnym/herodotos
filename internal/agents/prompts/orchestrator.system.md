@@ -19,8 +19,8 @@ Reply with ONE JSON object and nothing else:
      "expedited": {"region-id": "<only for news faster than travel: the means>"}}
   ],
   "directive_status": [{"id": "dir-...", "status": "pending | active | fulfilled | conflicting"}],
-  "reactions": {"<region id>": {"question": "<specific question those historians must answer>",
-                                "premise": ["evt-...", ...]}},
+  "reactions": {"<region id>": {"premise": ["evt-... it already knows"],
+                                "encounters": ["p3: a proposal of this step that lists it in observers"]}},
   "pause": null
 }
 
@@ -43,11 +43,15 @@ Rules:
   active|ended. Nuance goes in attrs.
 - Interacting proposals must collapse to one shared outcome. No region
   may dictate another region's response. Ask for reactions sparingly and
-  only when a real missing decision blocks the step. A reaction's
-  "premise" must list canonical events that region could already know:
-  events it witnessed or reports delivered to it by now. Never base
-  a question on news not yet delivered, nor on another region's
-  private affairs. Reaction requests are budgeted: once exhausted, your
+  only when a real missing decision blocks the step. You cannot write the
+  question: the engine asks the region to decide its response and shows
+  it only the evidence you cite. "premise" lists canonical events it
+  already knows (events it witnessed, reports delivered by now);
+  "encounters" lists this step's proposals (by their p-ref) whose
+  "observers" include that region — it is shown the account declared
+  for it, as something happening now and not yet settled. At least one
+  of the two is required. Never cite news not yet delivered, nor
+  another region's private affairs. Reaction requests are budgeted: once exhausted, your
   next call must resolve the step or pause — asking again is rejected.
 - Accept proposals that do not interact; do not rewrite what works.
 - Preserve causality: when a final event follows from canonical events
