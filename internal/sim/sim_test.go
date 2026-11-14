@@ -1214,3 +1214,65 @@ func TestFirstStepEncounterReaction(t *testing.T) {
 		t.Fatalf("observer's knowledge wrong:\n%s", p)
 	}
 }
+
+// The review's compact adversarial scenario in one step: a secret plot
+// with a delayed limited report, a substituted proposal, and a new
+// entity — checked in structured state and in each region's actual
+// next prompt, not just in the chronicle.
+func TestAdversarialScenario(t *testing.T) {
+	db, ctx := setup(t)
+	kingP := `{"prose":"x","events":[` +
+		`{"type":"development","title":"Rioting in the capital","prose":"Crowds demand grain."},` +
+		`{"type":"development","title":"A spymaster appointed","prose":"Elinor names Mirel her spymaster.","changes":[{"object":"entity","object_id":"mirel","op":"upsert","patch":{"kind":"person","name":"Mirel","region_id":"king-a"}}],"affects_entities":["q-elinor","mirel"]}` +
+		`],"memory":{"summary":"Rioting began; Mirel watches for us."}}`
+	prinP := `{"prose":"x","events":[{"type":"conflict","title":"Poison for the queen","prose":"Brannholm buys a poisoner to kill Elinor.","affects_entities":["q-elinor"],"accounts":{"king-a":"A rumour: foreign silver moves in the palace kitchens."},"delivery":{"king-a":4}}],"memory":{"summary":"The poisoner is paid."}}`
+	orch := `{"notes":"Riots become a petition; the rest stands.","events":[` +
+		`{"origin":"king-a","type":"development","title":"A grain petition","prose":"Guild elders petition the queen."},` +
+		`{"origin":"king-a","type":"development","title":"A spymaster appointed","prose":"Elinor names Mirel her spymaster.","changes":[{"object":"entity","object_id":"mirel","op":"upsert","patch":{"kind":"person","name":"Mirel","region_id":"king-a"}}],"affects_entities":["q-elinor","mirel"]},` +
+		`{"origin":"prin-b","type":"conflict","title":"Poison for the queen","prose":"Brannholm buys a poisoner to kill Elinor.","affects_entities":["q-elinor"],"accounts":{"king-a":"A rumour: foreign silver moves in the palace kitchens."},"delivery":{"king-a":4}}` +
+		`],"dispositions":{"p1":{"outcome":"revised","reason":"no riots"},"p2":{"outcome":"accepted"},"p3":{"outcome":"accepted"}}}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingP},
+		{Role: "logographer:prin-b", Text: prinP},
+		{Role: "orchestrator", Text: orch},
+		{Role: "logographer:king-a:reconcile", Text: `{"memory":{"summary":"Guild elders petitioned; Mirel watches for us."}}`},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	res, err := e.RunStep(ctx)
+	if err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	if res.ModelCalls != 4 {
+		t.Fatalf("only king-a needed reconciliation: %d calls", res.ModelCalls)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if snap.Entities["mirel"] == nil {
+		t.Fatal("new entity not created")
+	}
+	if m := snap.Memories["king-a"]; strings.Contains(m.Summary, "Rioting") {
+		t.Fatalf("king-a memory keeps the substituted outcome: %q", m.Summary)
+	}
+	if m := snap.Memories["prin-b"]; m.Summary != "The poisoner is paid." {
+		t.Fatalf("prin-b's accepted memory lost: %q", m.Summary)
+	}
+	kingPrompt := nextStepPrompt(t, db, ctx, "king-a")
+	for _, leak := range []string{"poisoner", "Poison for the queen"} {
+		if strings.Contains(kingPrompt, leak) {
+			t.Fatalf("king-a prompt leaks %q before delivery", leak)
+		}
+	}
+	if !strings.Contains(kingPrompt, "Mirel") || !strings.Contains(kingPrompt, "A grain petition") {
+		t.Fatal("king-a prompt lacks its own settled history")
+	}
+	if p := nextStepPrompt(t, db, ctx, "prin-b"); strings.Contains(p, "Mirel") || strings.Contains(p, "spymaster") {
+		t.Fatal("prin-b prompt leaks king-a's private appointment")
+	}
+	// Delivery: step 4 brings the limited account only.
+	quietSteps(t, db, ctx, 2)
+	snap, _ = db.LoadSnapshotForAttempt(ctx, 4)
+	view, _ := knowledge.BuildLogographerView(ctx, snap, "king-a", db)
+	p := agents.RenderLogographerPrompt(snap.Meta, snap.Meta.ClockStep, view).String()
+	if !strings.Contains(p, "foreign silver moves in the palace kitchens") || strings.Contains(p, "poisoner") {
+		t.Fatalf("delivered report wrong:\n%s", p)
+	}
+}
