@@ -68,6 +68,18 @@ web layer and the CLI are both thin callers of `sim.Engine.RunStep`.
   The limit: a proposer that lists an observer without an account
   discloses its full proposal prose to that observer; the prompts ask
   for accounts, but the engine cannot judge whether prose is private.
+- Memory follows outcomes, not origin labels. Every proposed event gets
+  an attempt-stable ref (`p1`, `p2`, ...); the orchestrator reports a
+  disposition per ref, and the engine decides acceptance structurally
+  (a final event with the same title and state changes, whatever its
+  origin label). The mapping is stored in `proposal_outcomes` and shown
+  on the attempt page. A region's pre-adjudication memory and beliefs
+  commit unchanged only when all its proposals — and any encounters a
+  reaction request showed it — were accepted. Otherwise the region is
+  asked once (`logographer:<id>:reconcile`) to rewrite them from its
+  proposals' fates and the settled events it witnessed; orchestrator
+  reasons are never shown. Without budget, or on failure, the previous
+  memory stands and the step's beliefs from that region are dropped.
 - News timing is a code-enforced baseline, not a transport
   simulation. A report's earliest step must be at least one step after
   the event and no earlier than the shortest connection route from any

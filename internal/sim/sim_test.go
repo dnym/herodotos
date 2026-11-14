@@ -109,14 +109,16 @@ func TestRejectedProposalsDoNotRewriteMemory(t *testing.T) {
 	}
 }
 
-// Partial acceptance keeps memory: some of the region's account became
-// history, and it is not the engine's job to split prose.
-func TestPartialAcceptanceKeepsMemory(t *testing.T) {
+// Partial acceptance does not vouch for the whole draft memory: the
+// region rewrites it once against the committed outcome.
+func TestPartialAcceptanceReconcilesMemory(t *testing.T) {
 	db, ctx := setup(t)
+	reconciled := `{"memory":{"summary":"Rioting began; talk of a regency council came to nothing.","open_threads":["a council may yet be named"]}}`
 	fake := &inference.Scripted{Replies: []inference.Reply{
 		{Role: "logographer:king-a", Text: kingTwoProposals},
 		{Role: "logographer:prin-b", Text: prinQuiet},
 		{Role: "orchestrator", Text: orchPartial},
+		{Role: "logographer:king-a:reconcile", Text: reconciled},
 	}}
 	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
 	res, err := e.RunStep(ctx)
@@ -126,10 +128,95 @@ func TestPartialAcceptanceKeepsMemory(t *testing.T) {
 	if len(res.EventIDs) != 2 {
 		t.Fatalf("expected one accepted + one orchestrator event: %+v", res)
 	}
+	rc := fake.Calls()[3].Prompt
+	if !strings.Contains(rc, `"Rioting in the capital" became history as proposed`) ||
+		!strings.Contains(rc, `"Emergency council named" did not happen`) {
+		t.Fatalf("reconcile request does not state the outcomes:\n%s", rc)
+	}
+	if strings.Contains(rc, "premature") {
+		t.Fatal("orchestrator reasoning leaked into the regional prompt")
+	}
 	snap, _ := db.LoadSnapshot(ctx)
-	if snap.Memories["king-a"].UpdatedStep != 1 ||
-		!strings.Contains(snap.Memories["king-a"].Summary, "Rioting began") {
-		t.Errorf("partial acceptance should keep the memory update: %+v", snap.Memories["king-a"])
+	m := snap.Memories["king-a"]
+	if m.UpdatedStep != 1 || strings.Contains(m.Summary, "was named") || !strings.Contains(m.Summary, "came to nothing") {
+		t.Errorf("memory not reconciled with the outcome: %+v", m)
+	}
+	outs, err := db.ListProposalOutcomes(ctx, res.AttemptID)
+	if err != nil || len(outs) != 2 || outs[0].Outcome != "accepted" || outs[1].Outcome != "unaccounted" {
+		t.Fatalf("proposal outcomes: %+v %v", outs, err)
+	}
+}
+
+// The review's case: the orchestrator substitutes a different outcome
+// under the same regional origin. The origin label must not vouch for a
+// memory of riots that never happened.
+func TestSubstitutedOutcomeUnderSameOriginReconciles(t *testing.T) {
+	db, ctx := setup(t)
+	petition := `{"notes":"No riots; a petition.","events":[{"origin":"king-a","type":"development","title":"A grain petition","prose":"Guild elders petition the queen for grain.","affects_entities":["q-elinor"]}],"dispositions":{"p1":{"outcome":"revised","reason":"riots implausible given B's secret grain shipments"}}}`
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: petition},
+		{Role: "logographer:king-a:reconcile", Text: `{"memory":{"summary":"Guild elders petitioned the queen for grain; no riots broke out."}}`},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	rc := fake.Calls()[3].Prompt
+	if !strings.Contains(rc, "A grain petition") {
+		t.Fatal("reconcile request lacks the witnessed outcome")
+	}
+	if strings.Contains(rc, "secret grain shipments") {
+		t.Fatal("orchestrator's private reasoning leaked")
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if m := snap.Memories["king-a"]; strings.Contains(m.Summary, "Rioting began") || !strings.Contains(m.Summary, "petition") {
+		t.Fatalf("memory records the rejected outcome: %+v", m)
+	}
+}
+
+// Without budget for reconciliation the previous memory stands: the
+// conservative fallback never commits an unvouched draft.
+func TestReconcileUnavailableKeepsPreviousMemory(t *testing.T) {
+	db, ctx := setup(t)
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingTwoProposals},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: orchPartial},
+	}}
+	b := config.DefaultBudgets()
+	b.MaxModelCallsPerStep = 3
+	e := &Engine{DB: db, Client: fake, ModelName: "fake", Budgets: b}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if m := snap.Memories["king-a"]; m.Summary != "A fragile monarchy." {
+		t.Fatalf("unvouched draft memory committed: %+v", m)
+	}
+	if m := snap.Memories["prin-b"]; m.UpdatedStep != 1 {
+		t.Fatalf("quiet region's memory should stand: %+v", m)
+	}
+}
+
+// An accepted proposal relabeled as orchestrator-authored still vouches
+// for the region's memory: acceptance is structural, not a label.
+func TestRelabeledAcceptanceKeepsMemory(t *testing.T) {
+	db, ctx := setup(t)
+	relabeled := strings.Replace(orchAccept, `"origin":"king-a"`, `"origin":"orchestrator","observers":["king-a"]`, 1)
+	fake := &inference.Scripted{Replies: []inference.Reply{
+		{Role: "logographer:king-a", Text: kingReply},
+		{Role: "logographer:prin-b", Text: prinQuiet},
+		{Role: "orchestrator", Text: relabeled},
+	}}
+	e := &Engine{DB: db, Client: fake, ModelName: "fake"}
+	if _, err := e.RunStep(ctx); err != nil {
+		t.Fatalf("run step: %v", err)
+	}
+	snap, _ := db.LoadSnapshot(ctx)
+	if m := snap.Memories["king-a"]; m.Summary != "Rioting began." {
+		t.Fatalf("accepted outcome's memory discarded: %+v", m)
 	}
 }
 

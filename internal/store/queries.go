@@ -520,3 +520,53 @@ func eventDelivery(events []domain.PropEvent) map[string]int {
 	}
 	return out
 }
+
+// ProposalOutcome records what adjudication did with one proposed event.
+type ProposalOutcome struct {
+	Ref      string
+	Author   string
+	Title    string
+	Declared string // the orchestrator's disposition; empty when none
+	Outcome  string // accepted, revised, rejected, unaccounted
+	Reason   string
+}
+
+// RecordProposalOutcomes stores the adjudication mapping of an attempt.
+func (d *DB) RecordProposalOutcomes(ctx context.Context, attemptID string, outs []ProposalOutcome) error {
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, o := range outs {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO proposal_outcomes(attempt_id, ref, author, title, declared, outcome, reason)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(attempt_id, ref) DO UPDATE SET declared=excluded.declared, outcome=excluded.outcome, reason=excluded.reason`,
+			attemptID, o.Ref, o.Author, o.Title, o.Declared, o.Outcome, o.Reason); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListProposalOutcomes returns an attempt's adjudication mapping in
+// proposal order.
+func (d *DB) ListProposalOutcomes(ctx context.Context, attemptID string) ([]ProposalOutcome, error) {
+	rows, err := d.sqlDB.QueryContext(ctx,
+		`SELECT ref, author, title, declared, outcome, reason FROM proposal_outcomes
+		 WHERE attempt_id = ? ORDER BY CAST(substr(ref, 2) AS INTEGER), ref`, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProposalOutcome
+	for rows.Next() {
+		var o ProposalOutcome
+		if err := rows.Scan(&o.Ref, &o.Author, &o.Title, &o.Declared, &o.Outcome, &o.Reason); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}

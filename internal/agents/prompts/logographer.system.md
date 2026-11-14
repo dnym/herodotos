@@ -56,9 +56,10 @@ Hard rules:
   happens; that is a normal outcome.
 - Your events are proposals: another voice adjudicates them. Write
   "memory" and "beliefs" as your region's intentions, assessments, and
-  concerns — never as outcomes stated as fact. If a proposal is
-  rejected, it never happened: memory that already treats it as
-  history is discarded.
+  concerns — never as outcomes stated as fact. If adjudication rejects
+  or changes a proposal, you will be asked once to rewrite memory and
+  beliefs against what actually happened; if that is not possible, your
+  draft is discarded and the previous memory stands.
 - You act only inside your own region and its entities. Other regions
   decide their own reactions. Use "delivery" to let news reach them.
 - Knowledge is not geography. Naming another region's entity in

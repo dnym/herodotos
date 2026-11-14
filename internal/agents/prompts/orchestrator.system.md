@@ -18,6 +18,7 @@ Reply with ONE JSON object and nothing else:
      "delivery": {"region-id": <earliest step news arrives>},
      "expedited": {"region-id": "<only for news faster than travel: the means>"}}
   ],
+  "dispositions": {"p1": {"outcome": "accepted | revised | rejected", "reason": "<at most 20 words>"}},
   "directive_status": [{"id": "dir-...", "status": "pending | active | fulfilled | conflicting"}],
   "reactions": {"<region id>": {"premise": ["evt-... it already knows"],
                                 "encounters": ["p3: a proposal of this step that lists it in observers"]}},
@@ -53,7 +54,10 @@ Rules:
   of the two is required. Never cite news not yet delivered, nor
   another region's private affairs. Reaction requests are budgeted: once exhausted, your
   next call must resolve the step or pause — asking again is rejected.
-- Accept proposals that do not interact; do not rewrite what works.
+- Accept proposals that do not interact; do not rewrite what works. An
+  accepted proposal is re-emitted with the same title and changes.
+- Give every proposal ref (p1, p2, ...) a disposition. Reasons are
+  diagnostics for the human; regions never see them.
 - Preserve causality: when a final event follows from canonical events
   you were shown, name them in "causes". An event rooted only in
   standing conditions may carry none; a link to an event that does not

@@ -286,17 +286,12 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		BaseRevision: snap.Meta.Revision,
 		Summary:      summarize(final.Notes),
 	}
-	// Which regions survive as authors in the adjudicated outcome.
-	represented := map[domain.ID]bool{}
 	if err := st.pv.ValidateFinalEvents(final.Events); err != nil {
 		return fail("final event rejected", err)
 	}
 	for _, ev := range final.Events {
 		if ev.Origin == "" {
 			ev.Origin = "orchestrator"
-		}
-		if ev.Origin != "orchestrator" {
-			represented[ev.Origin] = true
 		}
 		ce := store.CommittedEvent{
 			Type: ev.Type, Title: ev.Title, Prose: ev.Prose,
@@ -348,28 +343,66 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 		}
 	}
 
-	for regionID, m := range memories {
-		// Rejected fiction must not survive as invented history: when a
-		// region proposed events but none of them survived adjudication
-		// under its authorship, its memory update describes outcomes
-		// that never happened — keep the previous memory instead. A
-		// quiet step's assessments (no proposals) always stand; beliefs
-		// are in-world opinions and stand on their own.
-		if len(agents.ProposalMap(items)["logographer:"+regionID]) > 0 && !represented[regionID] {
+	// Memory and beliefs written before adjudication can only be
+	// trusted where adjudication kept the region's proposals (and any
+	// encounters it was shown) unchanged. Everywhere else the region
+	// rewrites them once against the committed outcome — a bounded
+	// call; if it cannot be made, the previous memory stands and the
+	// step's beliefs are dropped. A quiet step's assessments (no
+	// proposals, no encounters) always stand.
+	outcomes := agents.ResolveOutcomes(items, final.Events, final.Dispositions)
+	if err := e.DB.RecordProposalOutcomes(context.WithoutCancel(ctx), attemptID, outcomes); err != nil {
+		return fail("record proposal outcomes", err)
+	}
+	byRef := map[string]store.ProposalOutcome{}
+	for _, o := range outcomes {
+		byRef[o.Ref] = o
+	}
+	for _, regionID := range regionIDs {
+		draft, drafted := memories[regionID], beliefs[regionID]
+		if draft == nil && len(drafted) == 0 {
 			continue
 		}
-		plan.Memories = append(plan.Memories, domain.Memory{
-			RegionID: regionID, Summary: m.Summary, OpenThreads: m.OpenThreads, UpdatedStep: newStep,
-		})
-	}
-
-	beliefRegions := make([]string, 0, len(beliefs))
-	for regionID := range beliefs {
-		beliefRegions = append(beliefRegions, regionID)
-	}
-	sort.Strings(beliefRegions) // stable row ids: same step, same order
-	for _, regionID := range beliefRegions {
-		for _, bl := range beliefs[regionID] {
+		in := agents.ReconcileInput{Draft: draft, Beliefs: drafted}
+		settled := true
+		for _, o := range outcomes {
+			if o.Author == "logographer:"+regionID {
+				in.Own = append(in.Own, o)
+				settled = settled && o.Outcome == "accepted"
+			}
+		}
+		for _, ref := range shown[domain.ID(regionID)] {
+			o := byRef[ref]
+			in.Encounters = append(in.Encounters, o)
+			settled = settled && o.Outcome == "accepted"
+		}
+		if !settled {
+			for _, fe := range final.Events {
+				for _, ob := range observers(&fe) {
+					if ob == regionID {
+						in.Witnessed = append(in.Witnessed, domain.Event{Title: fe.Title, Prose: fe.Prose})
+						if a := fe.Accounts[regionID]; a != "" {
+							in.Witnessed[len(in.Witnessed)-1] = domain.Event{Title: "What your region learned", Prose: a}
+						}
+					}
+				}
+			}
+			view, verr := knowledge.BuildLogographerView(ctx, snap, regionID, e.DB)
+			if verr != nil {
+				return fail("build reconcile view", verr)
+			}
+			rec, rerr := st.askReconcile(ctx, regionID, view, in, final.Events)
+			if rerr != nil {
+				continue // conservative: previous memory stands, beliefs dropped
+			}
+			draft, drafted = rec.Memory, rec.Beliefs
+		}
+		if draft != nil && draft.Summary != "" {
+			plan.Memories = append(plan.Memories, domain.Memory{
+				RegionID: regionID, Summary: draft.Summary, OpenThreads: draft.OpenThreads, UpdatedStep: newStep,
+			})
+		}
+		for _, bl := range drafted {
 			plan.Beliefs = append(plan.Beliefs, domain.Belief{
 				RegionID: regionID, SubjectID: bl.SubjectID,
 				Modality: bl.Modality, Statement: bl.Statement,
@@ -407,6 +440,15 @@ func observers(ev *domain.PropEvent) []domain.ID {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func hasRef(items []agents.ProposalItem, ref string) bool {
+	for _, it := range items {
+		if it.Ref == ref {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(ids []domain.ID, id domain.ID) bool {
@@ -546,6 +588,34 @@ func (s *stepRun) askFollowUp(ctx context.Context, regionID string, view *knowle
 	return reply, nil
 }
 
+// askReconcile asks a region to rewrite its draft memory and beliefs
+// against the adjudicated outcome. It needs budget; without it the
+// caller keeps the previous memory.
+func (s *stepRun) askReconcile(ctx context.Context, regionID string, view *knowledge.LogographerView, in agents.ReconcileInput, final []domain.PropEvent) (*agents.ReconcileReply, error) {
+	if s.used >= s.b.MaxModelCallsPerStep {
+		return nil, fmt.Errorf("no call budget left for reconciliation")
+	}
+	prompt := agents.RenderLogographerPrompt(s.snap.Meta, s.snap.Meta.ClockStep, view)
+	created := agents.CreatedEntities(s.snap, final)
+	var reply *agents.ReconcileReply
+	err := retryParse(s, ctx, "logographer:"+regionID+":reconcile", agents.SystemLogographer(), prompt,
+		agents.RenderReconcileRequest(in), 0.3, s.b.MaxOutputTokens,
+		func(text string) error {
+			r, err := agents.ParseReconcileReply(text)
+			if err != nil {
+				return err
+			}
+			for _, bl := range r.Beliefs {
+				if bl.SubjectID != "" && s.snap.Entities[bl.SubjectID] == nil && !created[bl.SubjectID] {
+					return fmt.Errorf("belief subject %q is not a known entity", bl.SubjectID)
+				}
+			}
+			reply = r
+			return nil
+		})
+	return reply, err
+}
+
 func (s *stepRun) askOrchestrator(ctx context.Context, prompt agents.Prompt, reactionsOK, finalOnly bool, items []agents.ProposalItem) (*agents.OrchestratorReply, error) {
 	var reply *agents.OrchestratorReply
 	maxTok := s.b.MaxOutputTokensOrchestr
@@ -566,6 +636,11 @@ func (s *stepRun) askOrchestrator(ctx context.Context, prompt agents.Prompt, rea
 			for _, ds := range r.DirectiveStatus {
 				if s.snap.Directives[ds.ID] == nil {
 					return fmt.Errorf("unknown directive %q in directive_status", ds.ID)
+				}
+			}
+			for ref := range r.Dispositions {
+				if !hasRef(items, ref) {
+					return fmt.Errorf("disposition for %q: no such proposal this step (refs are p1, p2, ...)", ref)
 				}
 			}
 			if finalOnly && len(r.Reactions) > 0 {

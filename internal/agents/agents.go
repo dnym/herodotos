@@ -76,7 +76,17 @@ type OrchestratorReply struct {
 	Events          []domain.PropEvent         `json:"events"`
 	DirectiveStatus []DirectiveStatus          `json:"directive_status,omitempty"`
 	Reactions       map[string]ReactionRequest `json:"reactions,omitempty"`
-	Pause           *Pause                     `json:"pause,omitempty"`
+	// Dispositions reports, per proposal ref, what adjudication did
+	// with it and why. The engine checks "accepted" against the final
+	// events; reasons are diagnostics and never reach regional agents.
+	Dispositions map[string]Disposition `json:"dispositions,omitempty"`
+	Pause        *Pause                 `json:"pause,omitempty"`
+}
+
+// Disposition is the orchestrator's account of one proposal.
+type Disposition struct {
+	Outcome string `json:"outcome"` // accepted, revised, rejected
+	Reason  string `json:"reason,omitempty"`
 }
 
 // DirectiveStatus updates one directive's status.
@@ -190,6 +200,16 @@ func ParseOrchestratorReply(text string) (*OrchestratorReply, error) {
 		case "pending", "active", "fulfilled", "conflicting":
 		default:
 			return nil, fmt.Errorf("directive %s: invalid status %q", ds.ID, ds.Status)
+		}
+	}
+	for ref, d := range r.Dispositions {
+		switch d.Outcome {
+		case "accepted", "revised", "rejected":
+		default:
+			return nil, fmt.Errorf("disposition for %s: outcome must be accepted, revised, or rejected, got %q", ref, d.Outcome)
+		}
+		if len(d.Reason) > 300 {
+			return nil, fmt.Errorf("disposition for %s: reason must be at most 300 characters", ref)
 		}
 	}
 	for region, rx := range r.Reactions {
@@ -1255,6 +1275,132 @@ func RenderReactionRequest(ev ReactionEvidence) string {
 		}
 	}
 	b.WriteString("Decide how your region responds, if at all, acting only within your own authority. Answer with the same JSON format; do not use \"consult\" or \"recall\" now.\n")
+	return b.String()
+}
+
+// --- adjudication outcomes ---
+
+// ResolveOutcomes maps every proposal to what adjudication did with it.
+// A proposal counts as accepted only when a final event carries it
+// structurally unchanged — same title and same state changes, whatever
+// origin label the orchestrator gave it. The orchestrator's declared
+// disposition explains, but cannot overrule that check: "accepted"
+// without a matching event becomes "revised"; an undeclared proposal
+// without one is "unaccounted". Only accepted outcomes can vouch for
+// memory written before adjudication.
+func ResolveOutcomes(items []ProposalItem, final []domain.PropEvent, declared map[string]Disposition) []store.ProposalOutcome {
+	out := make([]store.ProposalOutcome, 0, len(items))
+	for _, it := range items {
+		matched := false
+		for _, fe := range final {
+			if fe.Title == it.Event.Title && jsonCompact(fe.Changes) == jsonCompact(it.Event.Changes) {
+				matched = true
+				break
+			}
+		}
+		d := declared[it.Ref]
+		o := store.ProposalOutcome{Ref: it.Ref, Author: it.Author, Title: it.Event.Title, Declared: d.Outcome, Reason: d.Reason}
+		switch {
+		case d.Outcome == "accepted" && !matched:
+			o.Outcome = "revised"
+			o.Reason = strings.TrimSpace(o.Reason + " [engine: declared accepted, but no final event carries it unchanged]")
+		case d.Outcome != "":
+			o.Outcome = d.Outcome
+			if matched && d.Outcome != "accepted" {
+				// A proposal re-emitted verbatim was accepted, whatever
+				// the label says.
+				o.Outcome = "accepted"
+			}
+		case matched:
+			o.Outcome = "accepted"
+		default:
+			o.Outcome = "unaccounted"
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// ReconcileReply is a region's memory and beliefs rewritten after
+// adjudication, consistent with what actually became history.
+type ReconcileReply struct {
+	Memory  *MemoryUpdate  `json:"memory"`
+	Beliefs []BeliefRecord `json:"beliefs,omitempty"`
+}
+
+// ParseReconcileReply decodes a reconciliation reply.
+func ParseReconcileReply(text string) (*ReconcileReply, error) {
+	var r ReconcileReply
+	if err := decodeStrictJSON(text, &r); err != nil {
+		return nil, fmt.Errorf("invalid reply: %w", err)
+	}
+	if r.Memory == nil || strings.TrimSpace(r.Memory.Summary) == "" {
+		return nil, fmt.Errorf("reply needs \"memory\" with a non-empty \"summary\"")
+	}
+	if err := validateBeliefs(r.Beliefs); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// ReconcileInput is what a region may be shown after adjudication: the
+// fate of its own proposals and of encounters it was shown, and the
+// settled events it witnessed — never the orchestrator's reasons, which
+// may rest on other regions' private affairs.
+type ReconcileInput struct {
+	Own        []store.ProposalOutcome
+	Encounters []store.ProposalOutcome
+	Witnessed  []domain.Event // as the region knows them
+	Draft      *MemoryUpdate
+	Beliefs    []BeliefRecord
+}
+
+// RenderReconcileRequest asks a region to bring its draft memory in line
+// with the committed outcome.
+func RenderReconcileRequest(in ReconcileInput) string {
+	fate := func(o store.ProposalOutcome) string {
+		switch o.Outcome {
+		case "accepted":
+			return "became history as proposed"
+		case "revised":
+			return "became history only in changed form (see what your region witnessed)"
+		default:
+			return "did not happen"
+		}
+	}
+	var b strings.Builder
+	b.WriteString("\n\nTHE STEP HAS BEEN ADJUDICATED. This is not a new proposal: rewrite your region's memory and beliefs to match what actually happened.\n")
+	if len(in.Own) > 0 {
+		b.WriteString("Your proposals:\n")
+		for _, o := range in.Own {
+			fmt.Fprintf(&b, "- %q %s\n", o.Title, fate(o))
+		}
+	}
+	if len(in.Encounters) > 0 {
+		b.WriteString("What your people were seeing when asked to react:\n")
+		for _, o := range in.Encounters {
+			state := "is settled history"
+			if o.Outcome != "accepted" {
+				state = "did not settle as it first appeared; trust only what your region witnessed below"
+			}
+			fmt.Fprintf(&b, "- that encounter %s\n", state)
+		}
+	}
+	b.WriteString("What your region witnessed this step (settled history):\n")
+	if len(in.Witnessed) == 0 {
+		b.WriteString("- nothing\n")
+	}
+	for _, ev := range in.Witnessed {
+		fmt.Fprintf(&b, "- %s: %s\n", ev.Title, ev.Prose)
+	}
+	if in.Draft != nil {
+		fmt.Fprintf(&b, "Your draft memory, written before adjudication: %s\nDraft open threads: %s\n", in.Draft.Summary, jsonCompact(in.Draft.OpenThreads))
+	}
+	if len(in.Beliefs) > 0 {
+		fmt.Fprintf(&b, "Your draft beliefs: %s\n", jsonCompact(in.Beliefs))
+	}
+	b.WriteString(`Rules: what did not happen must not appear as history; changed outcomes are remembered as they settled. Unfinished intentions stay open threads, never accomplished facts. Keep a belief only if inhabitants would still hold it — a belief may stay deliberately mistaken (modality "mistaken"), but never because of an outcome that did not occur. ` +
+		`Reply with ONE JSON object only: {"memory": {"summary": "...", "open_threads": ["..."]}, "beliefs": [{"subject_id": "...", "modality": "known | uncertain | mistaken", "statement": "..."}]}` + "\n")
 	return b.String()
 }
 
