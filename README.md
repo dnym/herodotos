@@ -11,21 +11,26 @@ outcome to SQLite. Agents propose. Only the engine commits.
 
 1. The engine snapshots the committed world at the current clock step.
 2. Each active region's logographer receives a visibility-scoped view —
-   its region's canonical conditions, delivered reports, recorded
-   beliefs, its own memory — and proposes events as strict JSON.
+   its region's canonical conditions, the events its region witnessed,
+   delivered reports, recorded beliefs, its own memory, and baseline
+   news travel times — and proposes events as strict JSON.
 3. The engine detects interactions structurally (shared write targets,
    shared participants, cross-border actions) and asks the orchestrator
    to adjudicate everything into one shared history. Reaction rounds
    and correction retries are bounded.
-4. The engine validates every change (identities, regional authority,
-   delivery times), then commits events, state changes, delayed
-   reports, recorded beliefs, and memory updates in one short database
-   transaction. Beliefs are in-world opinions that may be wrong; each
+4. The engine validates the whole event set against a candidate state
+   (identities, creations, regional authority, travel-based delivery
+   times). Regions whose proposals did not survive unchanged rewrite
+   their memory once against the outcome. Then it commits events, state
+   changes, observations, delayed reports, recorded beliefs, and memory
+   updates in one short database transaction. Beliefs are in-world opinions that may be wrong; each
    region's set is pruned to its twelve newest.
 
 Canonical state and committed events are authoritative; prose, memory,
-and beliefs only describe them. News reaches other regions only at
-travel-appropriate steps, and a failed attempt keeps its full
+and beliefs only describe them. Being affected by an event is not
+knowing it: a region learns only what it witnessed or what a report
+delivers, possibly as a limited account. News reaches other regions
+only at travel-appropriate steps, and a failed attempt keeps its full
 diagnostics while changing nothing.
 
 ## Quick start
@@ -66,8 +71,9 @@ adjudicates against; advisory documents follow the skill pattern — a
 one-line description is always shown to the historians of the relevant
 scope, and the body is loaded only when its keywords match what that
 region is dealing with — a historian may also name up to 3 cataloged
-ids in a "consult" field, and the engine answers with one follow-up
-call carrying those full texts. The same documents can be managed with
+ids in a "consult" field (or up to 3 ids or keywords from its own
+older history in "recall"), and the engine answers with one follow-up
+call carrying those texts. The same documents can be managed with
 `herodotos refs`. `/export` downloads the
 entire canonical world as one JSON document. Mutation endpoints reject
 cross-origin requests. The prose UI is set in vendored EB Garamond
