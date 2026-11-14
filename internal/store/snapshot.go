@@ -230,7 +230,7 @@ func (d *DB) snapshotTx(ctx context.Context, tx *sql.Tx, attemptStep int) (*Snap
 	}
 	rows, err = tx.QueryContext(ctx,
 		`SELECT id, event_id, target_region_id, earliest_step,
-		        COALESCE(delivered_step, ?), COALESCE(account, '')
+		        COALESCE(delivered_step, ?), COALESCE(account, ''), COALESCE(mechanism, '')
 		 FROM reports
 		 WHERE delivered_step IS NOT NULL OR earliest_step <= ?
 		 ORDER BY COALESCE(delivered_step, ?), id`,
@@ -240,7 +240,7 @@ func (d *DB) snapshotTx(ctx context.Context, tx *sql.Tx, attemptStep int) (*Snap
 	}
 	for rows.Next() {
 		var rep domain.Report
-		if err := rows.Scan(&rep.ID, &rep.EventID, &rep.TargetRegionID, &rep.EarliestStep, &rep.DeliveredStep, &rep.Account); err != nil {
+		if err := rows.Scan(&rep.ID, &rep.EventID, &rep.TargetRegionID, &rep.EarliestStep, &rep.DeliveredStep, &rep.Account, &rep.Mechanism); err != nil {
 			if err := closeRows(rows); err != nil {
 				return nil, err
 			}

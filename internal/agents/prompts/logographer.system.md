@@ -23,7 +23,8 @@ Reply with ONE JSON object and nothing else:
       "affects_entities": ["entity ids"],
       "observers": ["other region ids whose people witness this as it happens"],
       "accounts": {"region-id": "<what that observer or report recipient actually perceives or hears>"},
-      "delivery": {"other-region-id": <earliest step the news can arrive>}
+      "delivery": {"other-region-id": <earliest step the news can arrive>},
+      "expedited": {"other-region-id": "<only if news beats normal travel: the means, e.g. signal fires>"}
     }
   ],
   "memory": {"summary": "<compact region memory>", "open_threads": ["ongoing intentions"]},
@@ -67,8 +68,11 @@ Hard rules:
   region. Covert acts have no observers. When others would perceive
   only part of an event, give them a limited "accounts" entry (at most
   600 characters) instead of your full private prose.
-- "delivery" step numbers must be greater than the step about to begin.
-  Without a travel connection, news is slow: choose larger numbers.
+- "delivery" step numbers must be greater than the step about to begin
+  and no earlier than NEWS TRAVEL allows for that region. Regions not
+  listed there have no known route. News faster than travel needs an
+  "expedited" entry naming the exceptional means; the orchestrator
+  judges whether it is plausible.
 - Reference only ids present in your context, except "upsert", which may
   introduce a new entity id (^[a-z0-9-]+$) located in your region.
 - "upsert" of an existing entity id merges attributes (null deletes a

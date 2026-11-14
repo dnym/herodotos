@@ -40,6 +40,7 @@ type ReportPlan struct {
 	TargetRegion domain.ID
 	EarliestStep int
 	Account      string // empty: the report carries the full prose
+	Mechanism    string // adjudicated exceptional means beating baseline travel
 }
 
 // CommitPlan is one candidate step. Everything in it commits atomically
@@ -124,8 +125,8 @@ func (d *DB) CommitStep(ctx context.Context, plan CommitPlan) ([]string, error) 
 			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO reports(id, event_id, target_region_id, earliest_step, account) VALUES (?, ?, ?, ?, ?)`,
-			rid, ids[rp.EventIndex], rp.TargetRegion, rp.EarliestStep, nullable(rp.Account)); err != nil {
+			`INSERT INTO reports(id, event_id, target_region_id, earliest_step, account, mechanism) VALUES (?, ?, ?, ?, ?, ?)`,
+			rid, ids[rp.EventIndex], rp.TargetRegion, rp.EarliestStep, nullable(rp.Account), nullable(rp.Mechanism)); err != nil {
 			return nil, fmt.Errorf("report: %w", err)
 		}
 	}

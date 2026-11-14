@@ -40,8 +40,10 @@ func TestParseRejectsOversizeAndIncomplete(t *testing.T) {
 
 func TestValidateLogographerProposal(t *testing.T) {
 	snap := &store.Snapshot{
-		Regions:  map[domain.ID]*domain.Region{"king-a": {ID: "king-a"}, "prin-b": {ID: "prin-b"}},
-		Entities: map[domain.ID]*domain.Entity{"q-elinor": {ID: "q-elinor", RegionID: "king-a"}},
+		Meta:        domain.Meta{StepDays: 7},
+		Regions:     map[domain.ID]*domain.Region{"king-a": {ID: "king-a"}, "prin-b": {ID: "prin-b"}},
+		Entities:    map[domain.ID]*domain.Entity{"q-elinor": {ID: "q-elinor", RegionID: "king-a"}},
+		Connections: []domain.Connection{{A: "king-a", B: "prin-b", TravelDay: 4}},
 	}
 	pv := &ProposalValidator{Snap: snap, CurrentStep: 4}
 
@@ -155,6 +157,8 @@ func TestRenderPromptsContainOwnConditionsOnly(t *testing.T) {
 		Region:      &domain.Region{ID: "king-a", Name: "Kingdom A", Status: "active", Attrs: map[string]any{"unrest": "low"}},
 		Entities:    []*domain.Entity{{ID: "q-elinor", Kind: "person", Name: "Queen Elinor", RegionID: "king-a", Status: "active"}},
 		AdjacentIDs: []domain.ID{"prin-b"},
+		Travel:      []knowledge.TravelNote{{RegionID: "prin-b", Days: 4, Neighbour: true, EarliestStep: 2}},
+		StepDays:    7,
 	}
 	p := RenderLogographerPrompt(meta, 0, v).String()
 	if !strings.Contains(p, `id=king-a`) || !strings.Contains(p, "unrest") {
@@ -163,8 +167,11 @@ func TestRenderPromptsContainOwnConditionsOnly(t *testing.T) {
 	if strings.Contains(p, `"ambition"`) {
 		t.Fatal("foreign conditions leaked into render")
 	}
-	if !strings.Contains(p, "- prin-b") {
-		t.Fatal("neighbour identity should be listed by id only")
+	if !strings.Contains(p, "- prin-b (neighbour, 4 days)") || !strings.Contains(p, "step 2 at the earliest") {
+		t.Fatal("neighbour should be listed by id with its news timing")
+	}
+	if !strings.Contains(p, "one step is 7 days") {
+		t.Fatal("step length missing from the prompt")
 	}
 }
 
@@ -541,7 +548,7 @@ func TestFitNeverTrimsMandatoryForAdditions(t *testing.T) {
 	full := prompt.String()
 	extra := "\nCORRECTION: " + strings.Repeat("x", 300) + "\n"
 	// Room for the rule and the addition, not for the optional entities.
-	got, err := prompt.Fit(extra, len(full)+len(extra)-200)
+	got, err := prompt.Fit(extra, len(full)+len(extra)-600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,5 +610,47 @@ func TestCandidateStateValidation(t *testing.T) {
 		Changes: []domain.Change{{Object: "entity", ObjectID: "nameless", Op: "upsert", Patch: map[string]any{"region_id": "king-a"}}}}
 	if err := pv.ValidateFinalEvents([]domain.PropEvent{bare}); err == nil || !strings.Contains(err.Error(), "kind") {
 		t.Fatalf("incomplete creation: %v", err)
+	}
+}
+
+// Baseline travel is enforced in code: a long route cannot deliver next
+// week unless an exceptional mechanism is named, and an unconnected
+// region cannot be reached by ordinary news at all.
+func TestDeliveryRespectsTravelTime(t *testing.T) {
+	snap := &store.Snapshot{
+		Meta:        domain.Meta{StepDays: 7, ClockStep: 0},
+		Regions:     map[domain.ID]*domain.Region{"a": {ID: "a"}, "b": {ID: "b"}, "c": {ID: "c"}, "far": {ID: "far"}},
+		Connections: []domain.Connection{{A: "a", B: "b", TravelDay: 60}, {A: "b", B: "c", TravelDay: 10}},
+	}
+	pv := &ProposalValidator{Snap: snap, CurrentStep: 0}
+	ev := func(to string, step int) *domain.PropEvent {
+		return &domain.PropEvent{Type: "development", Title: "t", Prose: "p", Delivery: map[string]int{to: step}}
+	}
+	// 60 days at 7 days a step: 9 steps of travel after step 1.
+	if err := pv.ValidateLogographerProposal("a", ev("b", 2)); err == nil || !strings.Contains(err.Error(), "earliest step is 10") {
+		t.Fatalf("next-week delivery over a 60-day route: %v", err)
+	}
+	if err := pv.ValidateLogographerProposal("a", ev("b", 10)); err != nil {
+		t.Fatalf("baseline delivery rejected: %v", err)
+	}
+	// Multi-hop: 70 days, so step 11 at the earliest.
+	if err := pv.ValidateLogographerProposal("a", ev("c", 10)); err == nil {
+		t.Fatal("multi-hop route shortcut accepted")
+	}
+	if err := pv.ValidateLogographerProposal("a", ev("far", 50)); err == nil || !strings.Contains(err.Error(), "no known travel route") {
+		t.Fatalf("unroutable delivery: %v", err)
+	}
+	// An explicit, adjudicated mechanism may beat the baseline.
+	fast := ev("b", 2)
+	fast.Origin = "a"
+	fast.Expedited = map[string]string{"b": "signal fires along the ridge"}
+	if err := pv.ValidateFinalEvent(fast); err != nil {
+		t.Fatalf("expedited delivery rejected: %v", err)
+	}
+	// Orchestrator events: news travels from the witnesses.
+	orch := &domain.PropEvent{Type: "development", Title: "t", Prose: "p", Origin: "orchestrator",
+		Observers: []domain.ID{"b"}, Delivery: map[string]int{"c": 3}}
+	if err := pv.ValidateFinalEvent(orch); err != nil {
+		t.Fatalf("delivery from an observer's region rejected: %v", err)
 	}
 }

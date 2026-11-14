@@ -92,7 +92,7 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 	b.Events = events
 
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, event_id, target_region_id, earliest_step, COALESCE(delivered_step, 0), COALESCE(account, '')
+		`SELECT id, event_id, target_region_id, earliest_step, COALESCE(delivered_step, 0), COALESCE(account, ''), COALESCE(mechanism, '')
 		 FROM reports ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (d *DB) ExportBundle(ctx context.Context) (*ExportBundle, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var rp domain.Report
-		if err := rows.Scan(&rp.ID, &rp.EventID, &rp.TargetRegionID, &rp.EarliestStep, &rp.DeliveredStep, &rp.Account); err != nil {
+		if err := rows.Scan(&rp.ID, &rp.EventID, &rp.TargetRegionID, &rp.EarliestStep, &rp.DeliveredStep, &rp.Account, &rp.Mechanism); err != nil {
 			return nil, err
 		}
 		b.Reports = append(b.Reports, rp)

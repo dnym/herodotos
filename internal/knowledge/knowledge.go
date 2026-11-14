@@ -45,6 +45,8 @@ type LogographerView struct {
 	Catalog       []domain.ReferenceDoc // id/title/description only: ask to consult
 	RecentEvents  []domain.Event        // recent events this region witnessed, as it knows them
 	AdjacentIDs   []domain.ID           // neighbor identity only, no conditions
+	Travel        []TravelNote          // baseline news timing to reachable regions
+	StepDays      int
 }
 
 // EventLookup resolves an event id; *store.DB.GetEvent satisfies it.
@@ -120,6 +122,8 @@ func BuildLogographerView(ctx context.Context, s *store.Snapshot, regionID domai
 			v.AdjacentIDs = append(v.AdjacentIDs, c.A)
 		}
 	}
+	v.Travel = travelNotes(s, regionID)
+	v.StepDays = s.Meta.StepDays
 	sort.Slice(v.Entities, func(i, j int) bool { return v.Entities[i].ID < v.Entities[j].ID })
 	sort.Slice(v.Relationships, func(i, j int) bool { return v.Relationships[i].ID < v.Relationships[j].ID })
 	sort.Slice(v.Beliefs, func(i, j int) bool { return v.Beliefs[i].ID < v.Beliefs[j].ID })

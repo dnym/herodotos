@@ -15,7 +15,8 @@ Reply with ONE JSON object and nothing else:
      "affects_entities": ["..."],
      "observers": ["other region ids whose people witness it as it happens"],
      "accounts": {"region-id": "<limited version that observer or report recipient gets>"},
-     "delivery": {"region-id": <earliest step news arrives>}}
+     "delivery": {"region-id": <earliest step news arrives>},
+     "expedited": {"region-id": "<only for news faster than travel: the means>"}}
   ],
   "directive_status": [{"id": "dir-...", "status": "pending | active | fulfilled | conflicting"}],
   "reactions": {"<region id>": {"question": "<specific question those historians must answer>",
@@ -72,4 +73,8 @@ Rules:
   or a report recipient only what it would perceive or hear, never the
   private canonical prose.
 - "delivery" only for regions that would not already know; earliest step
-  must exceed the step about to begin.
+  must exceed the step about to begin and respect travel: news moves
+  from the witnesses along CONNECTIONS, one step per started step
+  length of travel days. Faster news needs an "expedited" mechanism
+  that is plausible in this world (reject invented ones); with no
+  route at all, news arrives only that way.

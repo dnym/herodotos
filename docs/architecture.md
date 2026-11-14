@@ -56,6 +56,15 @@ web layer and the CLI are both thin callers of `sim.Engine.RunStep`.
   keyword queries, answered in the same single follow-up call as
   `consult` from the region's own record (at most eight entries,
   matched against the version the region knows).
+- News timing is a code-enforced baseline, not a transport
+  simulation. A report's earliest step must be at least one step after
+  the event and no earlier than the shortest connection route from any
+  witness (origin or observer) allows: one step per started step length
+  of travel days. A region with no known route is unreachable by
+  ordinary news. Beating the baseline needs an explicit `expedited`
+  mechanism per target, which the orchestrator adjudicates and the
+  report records. Logographer prompts list each reachable region with
+  its route length and earliest delivery step.
 - Failed attempts keep full diagnostics (proposals, model calls,
   tokens, errors) but produce zero canonical changes and never move
   the clock. Commitment is guarded by a base revision; a stale

@@ -300,6 +300,7 @@ func (e *Engine) RunStep(ctx context.Context) (*Result, error) {
 			}
 			plan.Reports = append(plan.Reports, store.ReportPlan{
 				EventIndex: idx, TargetRegion: region, EarliestStep: ev.Delivery[region], Account: ev.Accounts[region],
+				Mechanism: ev.Expedited[region],
 			})
 		}
 	}

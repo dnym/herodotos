@@ -120,6 +120,10 @@ type PropEvent struct {
 	// canonical prose.
 	Accounts map[string]string `json:"accounts,omitempty"`
 	Delivery map[string]int    `json:"delivery,omitempty"` // region -> earliest step
+	// Expedited names, per delivery target, the exceptional mechanism
+	// (signal fires, a sorcerer's sending) that lets news beat the
+	// baseline travel time. Without it, delivery respects travel days.
+	Expedited map[string]string `json:"expedited,omitempty"`
 }
 
 // Proposal is an agent's uncommitted output for one step.
@@ -153,6 +157,9 @@ type Report struct {
 	// Account is the limited version the report carries; empty means
 	// the full canonical prose.
 	Account string `json:"account,omitempty"`
+	// Mechanism names the adjudicated exceptional means by which the
+	// report beats baseline travel; empty for ordinary news.
+	Mechanism string `json:"mechanism,omitempty"`
 }
 
 // Belief is an in-world belief held by a region's relevant inhabitants or

@@ -381,8 +381,13 @@ func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.Log
 		fmt.Fprintf(&beliefs, "- %s about %s: %s\n", bl.Modality, orNone(bl.SubjectID), bl.Statement)
 	}
 	var neighbors strings.Builder
-	for _, id := range v.AdjacentIDs {
-		fmt.Fprintf(&neighbors, "- %s\n", id)
+	for _, tn := range v.Travel {
+		kind := "via other regions"
+		if tn.Neighbour {
+			kind = "neighbour"
+		}
+		fmt.Fprintf(&neighbors, "- %s (%s, %d days): news of this step's events arrives at step %d at the earliest\n",
+			tn.RegionID, kind, tn.Days, tn.EarliestStep)
 	}
 	var refs strings.Builder
 	for _, ref := range v.Retrieved {
@@ -411,7 +416,7 @@ func RenderLogographerPrompt(meta domain.Meta, currentStep int, v *knowledge.Log
 		{heading: "ENTITIES IN YOUR REGION", body: entities.String()},
 		{heading: "RELATIONSHIPS VISIBLE TO YOU", body: relationships.String()},
 		{heading: "IN-WORLD BELIEFS (may be wrong)", body: beliefs.String()},
-		{heading: "NEIGHBOURING REGIONS (identity only; you do not see their conditions)", body: neighbors.String()},
+		{heading: fmt.Sprintf("NEWS TRAVEL (one step is %d days; regions listed by identity only, you do not see their conditions; unlisted regions have no known route)", v.StepDays), body: neighbors.String()},
 		{heading: "REFERENCE DOCUMENTS (advisory, matched to current events)", body: refs.String()},
 	}}
 }
@@ -612,9 +617,9 @@ func RenderOrchestratorPrompt(meta domain.Meta, currentStep int, snap *store.Sna
 	var proposalsSb strings.Builder
 	for _, it := range items {
 		ev := it.Event
-		fmt.Fprintf(&proposalsSb, "- %s [%s] %s: %s | causes=%s changes=%s entities=%s observers=%s accounts=%s delivery=%s\n",
+		fmt.Fprintf(&proposalsSb, "- %s [%s] %s: %s | causes=%s changes=%s entities=%s observers=%s accounts=%s delivery=%s expedited=%s\n",
 			it.Ref, it.Author, ev.Title, ev.Prose, jsonCompact(ev.Causes), jsonCompact(ev.Changes),
-			jsonCompact(ev.AffectsEntities), jsonCompact(ev.Observers), jsonCompact(ev.Accounts), jsonCompact(ev.Delivery))
+			jsonCompact(ev.AffectsEntities), jsonCompact(ev.Observers), jsonCompact(ev.Accounts), jsonCompact(ev.Delivery), jsonCompact(ev.Expedited))
 	}
 	var interactionsSb strings.Builder
 	for _, in := range interactions {
@@ -934,6 +939,9 @@ func (pv *ProposalValidator) validateLogographer(authorRegion domain.ID, ev *dom
 			return fmt.Errorf("delivery step %d must be greater than %d", step, newStep)
 		}
 	}
+	if err := pv.checkTravel([]domain.ID{authorRegion}, ev); err != nil {
+		return err
+	}
 	return pv.checkAccess(authorRegion, ev)
 }
 
@@ -1041,7 +1049,15 @@ func (pv *ProposalValidator) validateFinal(ev *domain.PropEvent, c *candidate) e
 			return fmt.Errorf("event %q has no regional origin, so it needs \"observers\": the regions whose people witness it (an unwitnessed event is known to no one until a report arrives)", ev.Title)
 		}
 	}
-	return pv.checkAccess(origin, ev)
+	if err := pv.checkAccess(origin, ev); err != nil {
+		return err
+	}
+	// News travels from whoever witnessed the event.
+	witnesses := append([]domain.ID{}, ev.Observers...)
+	if origin != "" {
+		witnesses = append(witnesses, origin)
+	}
+	return pv.checkTravel(witnesses, ev)
 }
 
 func knownCause(s *store.Snapshot, id domain.ID) bool {
@@ -1089,6 +1105,50 @@ func (pv *ProposalValidator) CanObserveEvent(regionID domain.ID, eventID domain.
 	}
 	for _, rep := range pv.Snap.DeliveredReports[regionID] {
 		if rep.EventID == eventID {
+			return true
+		}
+	}
+	return false
+}
+
+// checkTravel enforces baseline news timing: a report cannot arrive
+// before the shortest route from any witness allows, measured in whole
+// steps of the configured length. Beating the baseline needs an
+// explicit "expedited" mechanism, which the orchestrator adjudicates;
+// with no known route at all, news travels only by such a mechanism.
+func (pv *ProposalValidator) checkTravel(witnesses []domain.ID, ev *domain.PropEvent) error {
+	if len(ev.Delivery) == 0 && len(ev.Expedited) == 0 {
+		return nil
+	}
+	for r, why := range ev.Expedited {
+		if _, ok := ev.Delivery[r]; !ok {
+			return fmt.Errorf("expedited entry for %q has no matching delivery", r)
+		}
+		if strings.TrimSpace(why) == "" || len(why) > 200 {
+			return fmt.Errorf("expedited mechanism for %q must name the means in at most 200 characters", r)
+		}
+	}
+	newStep := pv.CurrentStep + 1
+	days := knowledge.TravelDays(pv.Snap, witnesses)
+	for _, r := range sortedStrings(mapKeys(ev.Delivery)) {
+		step := ev.Delivery[r]
+		if contains(witnesses, r) || ev.Expedited[r] != "" {
+			continue
+		}
+		d, ok := days[r]
+		if !ok {
+			return fmt.Errorf("delivery to %q: no known travel route reaches it from %s; news cannot arrive unless an \"expedited\" mechanism is named", r, strings.Join(witnesses, ", "))
+		}
+		if min := knowledge.EarliestDeliveryStep(newStep, d, pv.Snap.Meta.StepDays); step < min {
+			return fmt.Errorf("delivery to %q at step %d is too early: the route takes %d days and one step is %d days, so the earliest step is %d (or name an \"expedited\" mechanism)", r, step, d, pv.Snap.Meta.StepDays, min)
+		}
+	}
+	return nil
+}
+
+func contains(ids []domain.ID, id domain.ID) bool {
+	for _, x := range ids {
+		if x == id {
 			return true
 		}
 	}
