@@ -23,11 +23,11 @@ type Snapshot struct {
 	// directly, over the whole history (not just the recent window),
 	// mapped to the account it received ("" = full prose). Together
 	// with DeliveredReports this is the complete access policy.
-	Observed map[domain.ID]map[domain.ID]string
-	Beliefs          map[domain.ID][]domain.Belief
-	WorldRefs        []domain.ReferenceDoc
-	RegionRefs       map[domain.ID][]domain.ReferenceDoc
-	RecentEvents     []domain.Event
+	Observed     map[domain.ID]map[domain.ID]string
+	Beliefs      map[domain.ID][]domain.Belief
+	WorldRefs    []domain.ReferenceDoc
+	RegionRefs   map[domain.ID][]domain.ReferenceDoc
+	RecentEvents []domain.Event
 }
 
 // LoadSnapshot reads the committed state at the current clock step.

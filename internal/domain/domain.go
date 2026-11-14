@@ -104,13 +104,13 @@ type Change struct {
 // PropEvent is one event inside an agent proposal: an intention, not a
 // committed outcome.
 type PropEvent struct {
-	Type            string         `json:"type"`
-	Title           string         `json:"title"`
-	Prose           string         `json:"prose"`
-	Origin          ID             `json:"origin,omitempty"` // authoring region, set by the engine
-	Causes          []ID           `json:"causes,omitempty"`
-	Changes         []Change       `json:"changes,omitempty"`
-	AffectsEntities []ID           `json:"affects_entities,omitempty"`
+	Type            string   `json:"type"`
+	Title           string   `json:"title"`
+	Prose           string   `json:"prose"`
+	Origin          ID       `json:"origin,omitempty"` // authoring region, set by the engine
+	Causes          []ID     `json:"causes,omitempty"`
+	Changes         []Change `json:"changes,omitempty"`
+	AffectsEntities []ID     `json:"affects_entities,omitempty"`
 	// Observers are the regions (besides the origin) whose people
 	// witness the event directly as it happens. Being affected is not
 	// observing: the target of a covert act is no observer.
